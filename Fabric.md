@@ -163,4 +163,195 @@ panic: Error reading configuration: Unsupported Config Type ""*
 终止所有活动的或过时的 docker 容器，并删除以前生成的构件 ：  
 ***./network.sh down***  
 启动测试网络：  
-***./network.sh up createChannel***
+***./network.sh up createChannel·***  
+
+使用 *Peer* CLI 将 *asset-transfer (basic)* 链码部署到通道上，步骤如下：  
+
+* [第一步 : 打包智能合约](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/deploy_chaincode.html#package-the-smart-contract)  
+* [第二步 ：安装链码包](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/deploy_chaincode.html#install-the-chaincode-package)  
+* [第三步 ：批准联码定义](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/deploy_chaincode.html#approve-a-chaincode-definition)  
+* [第四步 ：向通道提供链码定义](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/deploy_chaincode.html#committing-the-chaincode-definition-to-the-channel)  
+
+### 2.2 设置 Logspout  
+安装和配置 *Logspout* 的脚本是 *monitordocker.sh* ，其已被包含在 *test-network*  文件夹的 *Fabric samples* 中  
+***Logspout*** 工具将会在终端中持续输出日志，因此需要使用一个新的终端窗口  
+
+打开一个新终端并进入到 *test-network* 文件夹下 :  
+***cd fabric-samples/test-network***  
+
+使用以下命令启动 Logspout：  
+***./monitordocker.sh fabric_test***  
+### 2.3 打包智能合约  
+#### 2.3.1 Go  
+在打包链码前，我们需要安装链码依赖  
+切换到 Go 语言版本的 *asset-transfer (basic)* 目录下  
+***cd fabric-samples/asset-transfer-basic/chaincode-go*** 
+
+该例子使用 Go module 安装链码依赖  
+依赖将会被列举到 *go.mod* 的文件中，其在 *asset-transfer-basic/chaincode-go* 的文件夹下  
+
+*go.mod* 文件将 **Fabric** 合约 *API* 导入到智能合约包  
+可用文本编辑器打开 *asset-transfer-basic/chaincode-go/chaincode/smartcontract.go* ，来查看如何使用合约 *API* 在智能合约的开头定义 *SmartContract* 类型  
+
+*SmartContract* 类型用于为智能合约中定义的函数创建交易上下文，这些函数将数据读写到区块链账本  
+
+为了安装智能合约依赖，应在 *asset-transfer-basic/chaincode-go* 文件夹下运行以下命令：  
+***GO111MODULE=on go mod vendor***  
+如果命令生效，go 的依赖包将会被安装到 *vendor* 文件夹下  
+
+回到 *test-network* 的工作目录下，然后将链码连同网络的其他构件一同打包  
+***cd ../../test-network***  
+
+> 可以使用 *peer* CLI 在创建链码包时指定所需格式  
+*peer* 的二进制文件在 *bin* 目录下的 *fabric-samples* 仓库中  
+以下命令将这些二进制文件添加到 CLI 路径：  
+***export PATH=${PWD}/../bin:$PATH***  
+> 也需通过设置 *FABRIC_CFG_PATH* 在 *fabric-samples* 仓库中指定 *core.yaml* 文件：  
+***export FABRIC_CFG_PATH=$PWD/../config/***  
+>版本需为2.0.0或者更新的版本，以便能够运行本教程  
+***peer version***  
+
+现在，便可以使用 *peer lifecycle chaincode package* 的命令创建链码包：  
+*peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-go/ --lang golang --label basic_1.0*  
+
+* 这个命令将会在您当前的文件夹下创建一个名为 *basic.tar.gz* 的包  
+**--lang** 标记用来指明链码语言  
+**--path** 标记用来提供智能合约代码的位置  
+这个路径必须是完全有效的路径，或者是当前工作目录下的相对路径  
+**--label** 标志用于指定一个链码标签，该标签将在安装后识别链码  
+**注意** ： 建议标签包含链码名称和版本  
+#### 2.3.2 JavaScript  
+切换到 *JavaScript* 语言版本的 *asset-transfer (basic)* 目录下  
+***cd fabric-samples/asset-transfer-basic/chaincode-javascript***  
+
+依赖将会被列举在 *asset-transfer-basic/chaincode-javascript* 目录下的 *package.json* 文件中  
+
+*package.json* 文件将 *Fabric* 合约 *class* 导入到智能合约包  
+
+ 可用文本编辑器打开 *lib/assetTransfer.js* 来查看导入到智能合约及用于创建 *asset-transfer (basic)* 的合约 *class*  
+*AssetTransfer class* 用于为智能合约中定义的函数创建交易上下文，这些函数将数据读写到区块链账本  
+
+为了安装智能合约依赖，在 *asset-transfer-basic/chaincode-javascript* 文件夹下运行以下命令：  
+***npm install***  
+如果命令生效，*JavaScript* 的依赖包将会被安装到 *node_modules* 文件夹下  
+
+回到 *test-network* 的工作目录下，然后将链码连同网络的其他构件一同打包  
+***cd ../../test-network***  
+
+> 可以使用 *peer* CLI 在创建链码包时指定所需格式  
+*peer* 的二进制文件在 *bin* 目录下的 *fabric-samples* 仓库中  
+以下命令将这些二进制文件添加到 CLI 路径：  
+***export PATH=${PWD}/../bin:$PATH***  
+> 也需通过设置 *FABRIC_CFG_PATH* 在 *fabric-samples* 仓库中指定 *core.yaml* 文件：  
+***export FABRIC_CFG_PATH=$PWD/../config/***  
+>版本需为2.0.0或者更新的版本，以便能够运行本教程  
+***peer version***  
+
+现在，便可以使用 *peer lifecycle chaincode package* 的命令创建链码包：  
+*peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-javascript/ --lang node --label basic_1.0*  
+
+* 这个命令将会在您当前的文件夹下创建一个名为 *basic.tar.gz* 的包  
+**--lang** 标记用来指明链码语言  
+**--path** 标记用来提供智能合约代码的位置  
+这个路径必须是完全有效的路径，或者是当前工作目录下的相对路径  
+**--label** 标志用于指定一个链码标签，该标签将在安装后识别链码  
+**注意** ： 建议标签包含链码名称和版本  
+#### 2.3.3 Typescript  
+切换到 *TypeScript* 语言版本的 *asset-transfer (basic)* 目录下  
+***cd fabric-samples/asset-transfer-basic/chaincode-typescript***   
+
+依赖将会被列举在 *asset-transfer-basic/chaincode-typescript* 目录下的 *package.json* 文件中  
+
+*package.json* 文件将 *Fabric* 合约 *class* 导入到智能合约包  
+可用文本编辑器打开 *src/assetTransfer.ts* 来查看导入到智能合约及用于创建 *asset-transfer (basic)* 的合约 *class*  
+
+* 注意 **Asset class** 是从名为 *asset.ts* 类型的定义文件中导入  
+
+*AssetTransfer class* 用于为智能合约中定义的函数创建交易上下文，这些函数将数据读写到区块链账本  
+
+为了安装智能合约依赖，请在 *asset-transfer-basic/chaincode-typescript* 文件夹下运行以下命令：  
+***npm install***  
+如果命令生效，*JavaScript* 的依赖包将会被安装到 *node_modules* 文件夹下  
+
+回到 *test-network* 的工作目录下，然后将链码连同网络的其他构件一同打包  
+***cd ../../test-network***  
+
+> 可以使用 *peer* CLI 在创建链码包时指定所需格式  
+*peer* 的二进制文件在 *bin* 目录下的 *fabric-samples* 仓库中  
+以下命令将这些二进制文件添加到 CLI 路径：  
+***export PATH=${PWD}/../bin:$PATH***  
+> 也需通过设置 *FABRIC_CFG_PATH* 在 *fabric-samples* 仓库中指定 *core.yaml* 文件：  
+***export FABRIC_CFG_PATH=$PWD/../config/***  
+>版本需为2.0.0或者更新的版本，以便能够运行本教程  
+***peer version***   
+
+* 这个命令将会在您当前的文件夹下创建一个名为 *basic.tar.gz* 的包  
+**--lang** 标记用来指明链码语言  
+**--path** 标记用来提供智能合约代码的位置  
+这个路径必须是完全有效的路径，或者是当前工作目录下的相对路径  
+**--label** 标志用于指定一个链码标签，该标签将在安装后识别链码  
+**注意** ： 建议标签包含链码名称和版本  
+### 2.4 安装联盟包  
+首先在 Org1 的 *peer* 上安装链码  
+设置以下环境变量以 Org1 的管理员的身份去操作 *peer* CLI  
+而 *CORE_PEER_ADDRESS* 将被设置为指向 Org1 的 *peer0.org1.example.com*  
+
+执行 *eer lifecycle chaincode install* 命令安装 *peer* 上的链码  
+***peer lifecycle chaincode install basic.tar.gz***  
+如果命令生效，*peer* 将会生成和返回包 ID   
+这个包 ID 将在下一步中用于批准链码  
+
+然后可以在 Org2 *peer* 上安装链码  
+设置以下环境变量以 Org2 的管理员的身份去操作*peer* CLI  
+*CORE_PEER_ADDRESS* 将被设置为指向 Org1 的 *peer0.org2.example.com*  
+
+执行以下命令去安装链码 ：  
+***peer lifecycle chaincode install basic.tar.gz***  
+### 2.5 批准链码定义  
+在安装了链码包后，需要为组织批准链码定义  
+定义包括链码管理的**重要参数，如名称、版本和链码背书策略**   
+
+**重要步骤** ：  
+
+* **查询已安装的链码包** :  
+使用 ***peer lifecycle chaincode queryinstalled*** 命令查询本地区域中已安装的链码包   
+此命令将返回已安装链码的包ID，包括名称、版本和序列号  
+* **保存为环境变量** ：  
+将***peer lifecycle chaincode queryinstalled***命令返回的包 ID 粘贴到以下命令中  
+**注意** ： 并非所有用户的包 ID 都相同，因此您需要使用上一步命令窗口返回的包 ID 来完成此步骤  
+* **批准链码定义** ：  
+环境变量已经被设置为作为 Org2 管理员来进行操作  
+以 Org2 的身份批准 *asset-transfer (basic)* 的链码定义  
+链码在组织级别得到批准，因此命令只需针对一个 *peer*  
+批准会被在组织的内部通过 *gossip* 分发给其他 *peer*  
+使用 ***peer lifecycle chaincode approveformyorg*** 命令批准链码定义  
+* **以管理员角色批准** ：  
+*CORE_PEER_MSPCONFIGPATH* 变量需要指向包含管理员身份的 MSP 文件  
+将批准提交给排序服务，该服务将验证管理员签名，然后将批准分发给自己的 *peers*  
+### 2.6 提交链码定义到通道  
+可以使用 ***peer lifecycle chaincode checkcommitreadiness*** 命令来检查通道成员是否已经批准了相同的链码定义  
+用于 *checkcommitreadiness* 命令的标志与用于批准组织链码的标志相同  
+该命令将生成一个 JSON 映射，显示通道成员是否批准了在 *checkcommitreadiness* 命令中指定的参数  
+
+由于作为通道成员的两个组织都批准了相同的参数，因此链码定义已准备好提交给通道  
+可以使用 ***peer lifecycle chaincode commit*** 命令将链码定义提交到通道  
+*commit* 命令也需要由组织管理员提交  
+
+可以使用 ***peer lifecycle chaincode querycommitted*** 命令确认链码定义已经提交到通道  
+如果 *chaincode* 被成功提交到通道，*querycommitted* 命令将返回链码定义的序列和版本  
+### 2.7 调用链码  
+在将链码定义提交给通道后，链码将在加入到安装了链码的通道的 *peers* 上启动  
+*asset-transfer (basic)* 链码现在可以被客户端应用程序调用了  
+### 2.8 升级智能合约  
+在 *test-network* 目录下执行以下命令来安装链码依赖  
+***cd ../asset-transfer-basic/chaincode-javascript***  
+***npm install***  
+***cd ../../test-network***  
+可以执行以下命令从 *test-network* 目录打包 JavaScript 链码 ：
+
+```bash
+export PATH=${PWD}/../bin:$PATH
+export FABRIC_CFG_PATH=$PWD/../config/
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+peer lifecycle chaincode package basic_2.tar.gz --path ../asset-transfer-basic/chaincode-javascript/ --lang node --label basic_2.0
+```
