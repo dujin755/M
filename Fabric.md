@@ -185,15 +185,61 @@ panic: Error reading configuration: Unsupported Config Type ""*
 #### 2.3.1 Go  
 在打包链码前，我们需要安装链码依赖  
 切换到 Go 语言版本的 *asset-transfer (basic)* 目录下  
-***cd fabric-samples/asset-transfer-basic/chaincode-go*** 
+***cd fabric-samples/asset-transfer-basic/chaincode-go***   
+```bash
+$ cat go.mod
+module github.com/hyperledger/fabric-samples/asset-transfer-basic/chaincode-go
+
+go 1.14
+
+require (
+        github.com/golang/protobuf v1.3.2
+        github.com/hyperledger/fabric-chaincode-go v0.0.0-20200424173110-d7076418f212
+        github.com/hyperledger/fabric-contract-api-go v1.1.0
+        github.com/hyperledger/fabric-protos-go v0.0.0-20200424173316-dd554ba3746e
+        github.com/stretchr/testify v1.5.1
+)  
+```
 
 该例子使用 Go module 安装链码依赖  
 依赖将会被列举到 *go.mod* 的文件中，其在 *asset-transfer-basic/chaincode-go* 的文件夹下  
 
 *go.mod* 文件将 **Fabric** 合约 *API* 导入到智能合约包  
 可用文本编辑器打开 *asset-transfer-basic/chaincode-go/chaincode/smartcontract.go* ，来查看如何使用合约 *API* 在智能合约的开头定义 *SmartContract* 类型  
+```bash
+// SmartContract provides functions for managing an Asset
+type SmartContract struct {
+ contractapi.Contract
+}  
+```
 
 *SmartContract* 类型用于为智能合约中定义的函数创建交易上下文，这些函数将数据读写到区块链账本  
+```bash
+// CreateAsset issues a new asset to the world state with given details.
+func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, owner string, appraisedValue int) error {
+ exists, err := s.AssetExists(ctx, id)
+ if err != nil {
+  return err
+ }
+ if exists {
+  return fmt.Errorf("the asset %s already exists", id)
+ }
+
+ asset := Asset{
+  ID:             id,
+  Color:          color,
+  Size:           size,
+  Owner:          owner,
+  AppraisedValue: appraisedValue,
+ }
+ assetJSON, err := json.Marshal(asset)
+ if err != nil {
+  return err
+ }
+
+ return ctx.GetStub().PutState(id, assetJSON)
+}
+```
 
 为了安装智能合约依赖，应在 *asset-transfer-basic/chaincode-go* 文件夹下运行以下命令：  
 ***GO111MODULE=on go mod vendor***  
@@ -212,7 +258,9 @@ panic: Error reading configuration: Unsupported Config Type ""*
 ***peer version***  
 
 现在，便可以使用 *peer lifecycle chaincode package* 的命令创建链码包：  
-*peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-go/ --lang golang --label basic_1.0*  
+```bash  
+ peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-go/ --lang golang --label basic_1.0  
+ ```
 
 * 这个命令将会在您当前的文件夹下创建一个名为 *basic.tar.gz* 的包  
 **--lang** 标记用来指明链码语言  
@@ -225,11 +273,37 @@ panic: Error reading configuration: Unsupported Config Type ""*
 ***cd fabric-samples/asset-transfer-basic/chaincode-javascript***  
 
 依赖将会被列举在 *asset-transfer-basic/chaincode-javascript* 目录下的 *package.json* 文件中  
+```bash
+"dependencies": {
+  "fabric-contract-api": "^2.0.0",
+  "fabric-shim": "^2.0.0"  
+```
 
 *package.json* 文件将 *Fabric* 合约 *class* 导入到智能合约包  
 
  可用文本编辑器打开 *lib/assetTransfer.js* 来查看导入到智能合约及用于创建 *asset-transfer (basic)* 的合约 *class*  
+
+ ```bash
+ const { Contract } = require('fabric-contract-api');
+
+class AssetTransfer extends Contract {
+ ...
+}  
+```
 *AssetTransfer class* 用于为智能合约中定义的函数创建交易上下文，这些函数将数据读写到区块链账本  
+```bash
+async CreateAsset(ctx, id, color, size, owner, appraisedValue) {
+        const asset = {
+            ID: id,
+            Color: color,
+            Size: size,
+            Owner: owner,
+            AppraisedValue: appraisedValue,
+        };
+
+        await ctx.stub.putState(id, Buffer.from(JSON.stringify(asset)));
+    }  
+```
 
 为了安装智能合约依赖，在 *asset-transfer-basic/chaincode-javascript* 文件夹下运行以下命令：  
 ***npm install***  
@@ -248,7 +322,9 @@ panic: Error reading configuration: Unsupported Config Type ""*
 ***peer version***  
 
 现在，便可以使用 *peer lifecycle chaincode package* 的命令创建链码包：  
-*peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-javascript/ --lang node --label basic_1.0*  
+```bash
+peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-javascript/ --lang node --label basic_1.0  
+```
 
 * 这个命令将会在您当前的文件夹下创建一个名为 *basic.tar.gz* 的包  
 **--lang** 标记用来指明链码语言  
@@ -261,13 +337,40 @@ panic: Error reading configuration: Unsupported Config Type ""*
 ***cd fabric-samples/asset-transfer-basic/chaincode-typescript***   
 
 依赖将会被列举在 *asset-transfer-basic/chaincode-typescript* 目录下的 *package.json* 文件中  
+```bash
+"dependencies": {
+  "fabric-contract-api": "^2.0.0",
+  "fabric-shim": "^2.0.0"
+```
 
 *package.json* 文件将 *Fabric* 合约 *class* 导入到智能合约包  
 可用文本编辑器打开 *src/assetTransfer.ts* 来查看导入到智能合约及用于创建 *asset-transfer (basic)* 的合约 *class*  
 
 * 注意 **Asset class** 是从名为 *asset.ts* 类型的定义文件中导入  
+```bash
+import { Context, Contract } from 'fabric-contract-api';
+import { Asset } from './asset';
+
+export class AssetTransfer extends Contract {
+ ...
+}
+```
 
 *AssetTransfer class* 用于为智能合约中定义的函数创建交易上下文，这些函数将数据读写到区块链账本  
+```bash
+ // CreateAsset issues a new asset to the world state with given details.
+    public async CreateAsset(ctx: Context, id: string, color: string, size: number, owner: string, appraisedValue: number) {
+        const asset = {
+            ID: id,
+            Color: color,
+            Size: size,
+            Owner: owner,
+            AppraisedValue: appraisedValue,
+        };
+
+        await ctx.stub.putState(id, Buffer.from(JSON.stringify(asset)));
+    }
+```
 
 为了安装智能合约依赖，请在 *asset-transfer-basic/chaincode-typescript* 文件夹下运行以下命令：  
 ***npm install***  
@@ -285,6 +388,11 @@ panic: Error reading configuration: Unsupported Config Type ""*
 >版本需为2.0.0或者更新的版本，以便能够运行本教程  
 ***peer version***   
 
+可使用peer lifecycle chaincode package 的命令创建链码包：  
+```bash  
+peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-typescript/ --lang node --label basic_1.0
+```
+
 * 这个命令将会在您当前的文件夹下创建一个名为 *basic.tar.gz* 的包  
 **--lang** 标记用来指明链码语言  
 **--path** 标记用来提供智能合约代码的位置  
@@ -295,15 +403,32 @@ panic: Error reading configuration: Unsupported Config Type ""*
 首先在 Org1 的 *peer* 上安装链码  
 设置以下环境变量以 Org1 的管理员的身份去操作 *peer* CLI  
 而 *CORE_PEER_ADDRESS* 将被设置为指向 Org1 的 *peer0.org1.example.com*  
+```bash
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+```
 
-执行 *eer lifecycle chaincode install* 命令安装 *peer* 上的链码  
+执行 *peer lifecycle chaincode install* 命令安装 *peer* 上的链码  
 ***peer lifecycle chaincode install basic.tar.gz***  
 如果命令生效，*peer* 将会生成和返回包 ID   
 这个包 ID 将在下一步中用于批准链码  
+```bash
+2020-07-16 10:09:57.534 CDT [cli.lifecycle.chaincode] submitInstallProposal -> INFO 001 Installed remotely: response:<status:200 payload:"\nJbasic_1.0:e2db7f693d4aa6156e652741d5606e9c5f0de9ebb88c5721cb8248c3aead8123\022\tbasic_1.0" >
+2020-07-16 10:09:57.534 CDT [cli.lifecycle.chaincode] submitInstallProposal -> INFO 002 Chaincode code package identifier: basic_1.0:e2db7f693d4aa6156e652741d5606e9c5f0de9ebb88c5721cb8248c3aead8123
+```
 
 然后可以在 Org2 *peer* 上安装链码  
 设置以下环境变量以 Org2 的管理员的身份去操作*peer* CLI  
 *CORE_PEER_ADDRESS* 将被设置为指向 Org1 的 *peer0.org2.example.com*  
+```bash
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+```
 
 执行以下命令去安装链码 ：  
 ***peer lifecycle chaincode install basic.tar.gz***  
@@ -354,4 +479,12 @@ export PATH=${PWD}/../bin:$PATH
 export FABRIC_CFG_PATH=$PWD/../config/
 export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
 peer lifecycle chaincode package basic_2.tar.gz --path ../asset-transfer-basic/chaincode-javascript/ --lang node --label basic_2.0
+```
+运行以下命令以 Org1 管理员的身份操作peer CLI :  
+```bash  
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
 ```
