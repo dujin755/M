@@ -14,12 +14,69 @@
 
 *network.sh* : 在本地计算机上使用Docker镜像建立Fabric网络  
 ***./network.sh -h*** -->  以打印脚本帮助文本   
+```bash  
+Usage:
+  network.sh <Mode> [Flags]
+    Modes:
+      up - bring up fabric orderer and peer nodes. No channel is created
+      up createChannel - bring up fabric network with one channel
+      createChannel - create and join a channel after the network is created
+      deployCC - deploy the asset transfer basic chaincode on the channel or specify
+      down - clear the network with docker-compose down
+      restart - restart the network
+
+    Flags:
+    -ca <use CAs> -  create Certificate Authorities to generate the crypto material
+    -c <channel name> - channel name to use (defaults to "mychannel")
+    -s <dbtype> - the database backend to use: goleveldb (default) or couchdb
+    -r <max retry> - CLI times out after certain number of attempts (defaults to 5)
+    -d <delay> - delay duration in seconds (defaults to 3)
+    -ccn <name> - the short name of the chaincode to deploy: basic (default),ledger, private, secured
+    -ccl <language> - the programming language of the chaincode to deploy: go (default), java, javascript, typescript
+    -ccv <version>  - chaincode version. 1.0 (default)
+    -ccs <sequence>  - chaincode definition sequence. Must be an integer, 1 (default), 2, 3, etc
+    -ccp <path>  - Optional, chaincode path. Path to the chaincode. When provided the -ccn will be used as the deployed name and not the short name of the known chaincodes.
+    -cci <fcn name>  - Optional, chaincode init required function to invoke. When provided this function will be invoked after deployment of the chaincode and will define the chaincode as initialization required.
+    -i <imagetag> - the tag to be used to launch the network (defaults to "latest")
+    -cai <ca_imagetag> - the image tag to be used for CA (defaults to "latest")
+    -verbose - verbose mode
+    -h - print this message
+
+ Possible Mode and flag combinations
+   up -ca -c -r -d -s -i -verbose
+   up createChannel -ca -c -r -d -s -i -verbose
+   createChannel -c -r -d -verbose
+   deployCC -ccn -ccl -ccv -ccs -ccp -cci -r -d -verbose
+
+ Taking all defaults:
+   network.sh up
+
+ Examples:
+   network.sh up createChannel -ca -c mychannel -s couchdb -i 2.0.0
+   network.sh createChannel -c channelName
+   network.sh deployCC -ccn basic -ccl javascript  
+```
 
 在 *test-network* 目录中，运行以下命令删除先前运行的所有容器或工程：  
 ***./network.sh down***  
 启动网络:  
 ***./network.sh up***   (此命令创建一个由两个对等节点和一个排序节点组成的Fabric网络)
 * 运行 *./network.sh up* 时没有创建任何channel， 而是我们将在后面的步骤实现  
+
+执行成功后 ：  
+```bash  
+Creating network "net_test" with the default driver
+Creating volume "net_orderer.example.com" with default driver
+Creating volume "net_peer0.org1.example.com" with default driver
+Creating volume "net_peer0.org2.example.com" with default driver
+Creating orderer.example.com    ... done
+Creating peer0.org2.example.com ... done
+Creating peer0.org1.example.com ... done
+CONTAINER ID        IMAGE                               COMMAND             CREATED             STATUS                  PORTS                              NAMES
+8d0c74b9d6af        hyperledger/fabric-orderer:latest   "orderer"           4 seconds ago       Up Less than a second   0.0.0.0:7050->7050/tcp             orderer.example.com
+ea1cf82b5b99        hyperledger/fabric-peer:latest      "peer node start"   4 seconds ago       Up Less than a second   0.0.0.0:7051->7051/tcp             peer0.org1.example.com
+cd8d9b23cb56        hyperledger/fabric-peer:latest      "peer node start"   4 seconds ago       Up 1 second             7051/tcp, 0.0.0.0:9051->9051/tcp   peer0.org2.example.com
+```
 
 ### 1.2 测试网络的组成部分  
 列出计算机正在运行的Docker容器 ： ***docker ps -a***  
@@ -96,7 +153,7 @@ Peer 节点运行智能合约，包含业务逻辑
 *peer* CLI允许调用已部署的智能合约，更新通道，或安装和部署新的智能合约  
 
 * *fabric-samples* 代码库的 *bin* 文件夹中找到 *peer* 二进制文件  
-以下命令将这些二进制文件添加到您的CLI路径：  
+以下命令将这些二进制文件添加到自己的CLI路径：  
 
 ***export PATH=${PWD}/../bin:$PATH***  
 
@@ -104,7 +161,36 @@ Peer 节点运行智能合约，包含业务逻辑
 ***export FABRIC_CFG_PATH=$PWD/../config/***  
 
 可以设置环境变量，以允许操作者作为 *Org1 *操作 *peer* CLI ：   
-***#Environment variables for Org1***  
+```bash  
+# Environment variables for Org1
+
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+```   
+运行以下命令用一些资产来初始化账本 ：  
+```bash  
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem -C mychannel -n basic --peerAddresses localhost:7051 --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt --peerAddresses localhost:9051 --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt -c '{"function":"InitLedger","Args":[]}'  
+```  
+当一个网络成员希望在账本上转一些或者改变一些资产，链码会被调用  
+使用以下的指令来通过调用 *asset-transfer (basic)* 链码改变账本上的资产所有者：  
+```bash
+  peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem -C mychannel -n basic --peerAddresses localhost:7051 --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt --peerAddresses localhost:9051 --tlsRootCertFiles ${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt -c '{"function":"TransferAsset","Args":["asset6","Christopher"]}'
+```  
+可以使用另一个查询来查看调用如何改变了区块链账本的资产  
+可以把这个查询链码的机会通过 Org2 的 *peer* 来运行  
+设置以下的环境变量来操作 Org2 ：  
+```bash  
+# Environment variables for Org2
+
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+```
 
 以下指令可获取添加到通道账本的资产列表 ：  
 ***peer chaincode query -C mychannel -n basic -c '{"Args":["GetAllAssets"]}'***  
@@ -487,4 +573,282 @@ export CORE_PEER_LOCALMSPID="Org1MSP"
 export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
 export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
 export CORE_PEER_ADDRESS=localhost:7051
-```
+```  
+可以使用以下命令在 Org1 peer 上安装新的链码包 :  
+```bash  
+peer lifecycle chaincode install basic_2.tar.gz
+```  
+新的链码包将创建一个新的包 ID  
+可以通过查询 *peer* 来查找新的包 ID :  
+```TypeScript  
+peer lifecycle chaincode queryinstalled
+```  
+
+* 可以使用包标签查找新链码的包 ID，并将其保存为新的环境变量  
+* 每个链码包输出的包 ID 都会不同，所以不要复制和粘贴  
+
+Org1 现在可以批准新的链码定义 ：  
+```TypeScript
+peer lifecycle chaincode approveformyorg -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name basic --version 2.0 --package-id $NEW_CC_PACKAGE_ID --sequence 2 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
+```  
+现在需要安装链码包，并批准链码定义为 Org2，以便升级链码  
+执行以下命令以 Org2 管理员的身份操作 *peer* CLI :  
+```TypeScript  
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+```  
+我们可以使用以下命令在 Org2 *peer* 上安装新的链码包 :  
+***peer lifecycle chaincode install basic_2.tar.gz***  
+
+使用 *peer lifecycle chaincode checkcommitreadiness* 命令检查序列 2 的链码定义是否准备好提交到通道 ：  
+```TypeScript  
+peer lifecycle chaincode checkcommitreadiness --channelID mychannel --name basic --version 2.0 --sequence 2 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" --output json
+```  
+命令返回以下 *JSON* ，则可以升级链码 :  
+```bash   
+{
+  "Approvals": {
+    "Org1MSP": true,
+    "Org2MSP": true
+  }
+}
+```  
+Org2 可以使用以下命令升级链码 :  
+```TypeScript  
+peer lifecycle chaincode commit -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name basic --version 2.0 --sequence 2 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt" --peerAddresses localhost:9051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+```  
+使用 *docker ps* 命令来验证新的链码是否已经在您的 *peers* 上启动:  
+```TypeScript  
+$ docker ps
+CONTAINER ID        IMAGE                                                                                                                                                                    COMMAND                  CREATED             STATUS              PORTS                              NAMES
+7bf2f1bf792b        dev-peer0.org1.example.com-basic_2.0-572cafd6a972a9b6aa3fa4f6a944efb6648d363c0ba4602f56bc8b3f9e66f46c-69c9e3e44ed18cafd1e58de37a70e2ec54cd49c7da0cd461fbd5e333de32879b   "docker-entrypoint.s…"   2 minutes ago       Up 2 minutes                                           dev-peer0.org1.example.com-basic_2.0-572cafd6a972a9b6aa3fa4f6a944efb6648d363c0ba4602f56bc8b3f9e66f46c
+985e0967c27a        dev-peer0.org2.example.com-basic_2.0-572cafd6a972a9b6aa3fa4f6a944efb6648d363c0ba4602f56bc8b3f9e66f46c-158e9c6a4cb51dea043461fc4d3580e7df4c74a52b41e69a25705ce85405d760   "docker-entrypoint.s…"   2 minutes ago       Up 2 minutes                                           dev-peer0.org2.example.com-basic_2.0-572cafd6a972a9b6aa3fa4f6a944efb6648d363c0ba4602f56bc8b3f9e66f46c
+31fdd19c3be7        hyperledger/fabric-peer:latest                                                                                                                                           "peer node start"        About an hour ago   Up About an hour    0.0.0.0:7051->7051/tcp             peer0.org1.example.com
+1b17ff866fe0        hyperledger/fabric-peer:latest                                                                                                                                           "peer node start"        About an hour ago   Up About an hour    7051/tcp, 0.0.0.0:9051->9051/tcp   peer0.org2.example.com
+4cf170c7ae9b        hyperledger/fabric-orderer:latest
+```  
+
+### 2.9 清理  
+使用完链码后，还可以使用以下命令删除 *Logspout* 工具  
+***docker stop logspout***  
+***docker rm logspout***   
+
+可以通过在test-network目录下执行以下命令来关闭测试网络 :  
+***./network.sh down***  
+### 2.10 常见难题解决  
+#### 2.10.1 组织不同意使用链码
+*  **问题** ：  
+当我尝试向通道提交新的链码定义时，*peer lifecycle chaincode commit* 命令失败，出现以下错误 :  
+```bash  
+Error: failed to create signed transaction: proposal response was not successful, error code 500, msg failed to invoke backing implementation of 'CommitChaincodeDefinition': chaincode definition not agreed to by this org (Org1MSP)
+```  
+* **解决方案** ：  
+您可以尝试通过使用 *peer lifecycle chaincode checkcommitreadiness* 命令来解决此错误，以检查哪些通道成员已经批准了您试图提交的链码定义  
+  *peer lifecycle chaincode checkcommitreadiness* 将显示哪些组织未批准您试图提交的链码定义  
+
+#### 2.10.2 调用失败  
+* **问题** ：  
+第一次调用出现问题，出现以下错误 ：  
+```bash  
+Error: endorsement failure during invoke. response: status:500 message:"make sure the chaincode asset-transfer (basic) has been successfully defined on channel mychannel and try again: chaincode definition for 'asset-transfer (basic)' exists, but chaincode is not installed"
+```  
+* **解决方案** ：  
+当您批准您的链码定义时可能没有设置正确的 *--package-id*  
+如果正在运行一个基于 docker 的网络，可以使用docker ps命令来检查您的链码是否正在运行:  
+```TypeScript  
+docker ps
+CONTAINER ID        IMAGE                               COMMAND             CREATED             STATUS              PORTS                              NAMES
+7fe1ae0a69fa        hyperledger/fabric-orderer:latest   "orderer"           5 minutes ago       Up 4 minutes        0.0.0.0:7050->7050/tcp             orderer.example.com
+2b9c684bd07e        hyperledger/fabric-peer:latest      "peer node start"   5 minutes ago       Up 4 minutes        0.0.0.0:7051->7051/tcp             peer0.org1.example.com
+39a3e41b2573        hyperledger/fabric-peer:latest      "peer node start"   5 minutes ago       Up 4 minutes        7051/tcp, 0.0.0.0:9051->9051/tcp   peer0.org2.example.com
+```  
+如果没有看到列出任何链码容器，使用 *peer lifecycle chaincode approveformyorg* 命令批准具有正确包 ID 的链码定义  
+### 2.11 背书策略失败  
+**问题** ：  
+出现以下错误时 ：  
+```TypeScript  
+2020-04-07 20:08:23.306 EDT [chaincodeCmd] ClientWait -> INFO 001 txid [5f569e50ae58efa6261c4ad93180d49ac85ec29a07b58f576405b826a8213aeb] committed with status (ENDORSEMENT_POLICY_FAILURE) at localhost:7051
+Error: transaction invalidated with status (ENDORSEMENT_POLICY_FAILURE)
+```  
+**解决方案** ：  
+这个错误是提交交易没有收集到足够的背书来符合生命周期背书策略的结果  
+
+* 可能是交易没有足够的 *peers* 来满足策略  
+* 可能是由于一些 *peer* 组织没有包含 Endorsement  
+
+通道需要包含新的 */Channel/Application/LifecycleEndorsement* 和 */Channel/Application/Endorsement* 策略  
+
+---  
+---  
+## 3. 编写一个Fabric应用  
+### 总纲  
+* **搭建链块网络** ：
+应用程序需要与区块链网络互联，需要启动基础网络和部署一个智能合约来给应用程序使用  
+![图片](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/_images/AppConceptsOverview.png)  
+* **运行示例和智能合约互动** ：  
+ 我们的应用将使用 *assetTransfer* 智能合约在账本上创建、查询和更新资产  
+ 我们将逐步分析应用程序的代码以及它所调用的交易, 包括创建一些初始资产、查询一个资产、查询一系列资产、创建新资产以及将资产转让给新所有者  
+
+### 3.1 启动区块链网络  
+本地 ‘’fabric-samples’’代码库的本地拷贝里，导航到 ‘’test-network’’子目录  
+***cd fabric-samples/test-network***  
+
+若已经存在一个测试网络，需要将它关闭  
+然后启动 ：
+***./network.sh up createChannel -c mychannel -ca***  
+#### 3.1.1 部署智能合约  
+通过调用 *./network.sh* 脚本并提供链码名称和语言选项来部署包含智能合约的链码包  
+```bash  
+./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-typescript/ -ccl typescript
+```  
+#### 3.1.2 准备样例应用  
+打开一个新的终端，然后导航到*application-gateway-typescript*目录  
+***cd asset-transfer-basic/application-gateway-typescript***  
+然后安装  
+***npm install***  
+
+使用 *ls* 命令后，可见目录为 ：  
+```TypeScript  
+dist
+node_modules
+package-lock.json
+package.json
+src
+tsconfig.json
+```  
+### 3.2 运行样例应用  
+从*asset-transfer-basic/application-gateway-typescript*目录,运行以下命令 :  
+***npm start***  
+
+* **建立与Gateway的gRPC连接**  
+为了成功建立 TLS 连接,客户端使用的终端地址必须与网关的TLS证书中的地址匹配  
+由于客户端访问网关的 Docker 容器时使用的是 localhost 地址, 因此需要指定一个 gRPC 选项,强制将此终端地址解释为网关的配置主机名  
+```TypeScript  
+const peerEndpoint = 'localhost:7051';
+
+async function newGrpcConnection(): Promise<grpc.Client> {
+    const tlsRootCert = await fs.readFile(tlsCertPath);
+    const tlsCredentials = grpc.credentials.createSsl(tlsRootCert);
+    return new grpc.Client(peerEndpoint, tlsCredentials, {
+        'grpc.ssl_target_name_override': 'peer0.org1.example.com',
+    });
+}
+```  
+* **创建Gateway连接**  
+*Gateway* 连接具有三个要求:  
+> 与 Fabric Gateway 的 gRPC 连接  
+用于与网络交互的客户身份  
+用于为客户身份生成数字签名的签名实现  
+
+(示例应用程序使用 Org1 用户的 X.509 证书作为客户身份，以及基于该用户的私钥的签名实现)  
+```TypeScript 
+const client = await newGrpcConnection();
+
+const gateway = connect({
+    client,
+    identity: await newIdentity(),
+    signer: await newSigner(),
+});
+
+async function newIdentity(): Promise<Identity> {
+    const credentials = await fs.readFile(certPath);
+    return { mspId: 'Org1MSP', credentials };
+}
+
+async function newSigner(): Promise<Signer> {
+    const privateKeyPem = await fs.readFile(keyPath);
+    const privateKey = crypto.createPrivateKey(privateKeyPem);
+    return signers.newPrivateKeySigner(privateKey);
+}
+```  
+* **访问要调用的智能合约**   
+示例应用程序使用 Gateway 连接获取对Network的引用,然后获取该网络上部署的默认Contract  
+```TypeScript  
+const network = gateway.getNetwork(channelName);
+const contract = network.getContract(chaincodeName);
+```  
+* **使用样本资产填充账本**  
+应用程序使用 submitTransaction() 来调用 InitLedger 事务函数, 该函数将账本填充了一些样本资产  
+
+submitTransaction() 将使用 Fabric Gateway 来执行以下操作 :  
+> 对事务提案进行背书  
+将已背书的事务提交到订购服务  
+等待事务提交，更新账本状态  
+
+```TypeScript  
+await contract.submitTransaction(‘InitLedger’);
+```  
+* **调用事务函数读取和写入资产**   
+1. 查询所以资产 ： *evaluateTransaction()* 将使用 Fabric Gateway 来调用事务函数并返回其结果  
+示例应用程序的 GetAllAssets 调用如下：  
+```TypeScript  
+const resultBytes = await contract.evaluateTransaction('GetAllAssets');
+
+const resultJson = utf8Decoder.decode(resultBytes);
+const result = JSON.parse(resultJson);
+console.log('*** Result:', result);
+```  
+2. 创建新资产  
+```TypeScript  
+const assetId = `asset${Date.now()}`;
+
+await contract.submitTransaction(
+    'CreateAsset',
+    assetId,
+    'yellow',
+    '5',
+    'Tom',
+    '1300',
+);
+```  
+3. 更新资产  
+使用 submitAsync() 调用事务， 该调用在成功提交已背书的事务给订购服务后返回，而不是等待事务提交到账本  
+```TypeScript  
+const commit = await contract.submitAsync('TransferAsset', {
+    arguments: [assetId, 'Saptha'],
+});
+const oldOwner = utf8Decoder.decode(commit.getResult());
+
+console.log(`*** Successfully submitted transaction to transfer ownership from ${oldOwner} to Saptha`);
+console.log('*** Waiting for transaction commit');
+
+const status = await commit.getStatus();
+if (!status.successful) {
+    throw new Error(`Transaction ${status.transactionId} failed to commit with status code ${status.code}`);
+}
+
+console.log('*** Transaction committed successfully');
+```  
+4. 查询更新后的资产  
+```TypeScript  
+const resultBytes = await contract.evaluateTransaction('ReadAsset', assetId);
+
+const resultJson = utf8Decoder.decode(resultBytes);
+const result = JSON.parse(resultJson);
+console.log('*** Result:', result);
+```  
+5. 处理事务错误  
+submitTransaction() 的失败可能会生成多种不同类型的错误，指示错误发生在提交流程的哪个点， 并包含附加信息以使应用程序能够适当地响应  
+```TypeScript  
+try {
+    await contract.submitTransaction(
+        'UpdateAsset',
+        'asset70',
+        'blue',
+        '5',
+        'Tomoko',
+        '300',
+    );
+    console.log('******** FAILED to return an error');
+} catch (error) {
+    console.log('*** Successfully caught the error: \n', error);
+}
+```  
+### 3.3 清理  
+***./network.sh down***  
+
+---  
+---  
+## 4. 
