@@ -851,4 +851,390 @@ try {
 
 ---  
 ---  
-## 4. 
+## 4. 在Fabric中使用私有数据  
+### 4.1 资产转移私有数据示例用例  
+资产的公开详细信息，包括所有者的身份 --> *assetCollection*  
+所有者同意的初始评估值 --> *Org1MSPPrivateCollection*  
+Org2 的成员创建协议使用智能合约功能 'AgreeToTransfer' 进行交易并同意评估价值 --> *Org2MSPPrivateCollection*  
+### 4.2 构建集合定义 JSON 文件  
+* **name** : 集合的名称  
+* **policy** : 定义了哪些组织中的 Peer 节点能够存储集合数据  
+* **requiredPeerCount** : 私有数据要分发到的节点数，这是链码背书成功的条件之一  
+* **maxPeerCount** : 为了数据冗余，当前背书节点将尝试向其他节点分发数据的数量  
+如果当前背书节点发生故障，其他的冗余节点可以承担私有数据查询的任务  
+* **blockToLive** : 对于非常敏感的信息，比如价格或者个人信息，这个值代表书库可以在私有数据库中保存的时间  
+数据会在私有数据库中保存 blockToLive 个区块，之后就会被清除  
+如果要永久保留，将此值设置为 0 即可  
+* **memberOnlyRead** : 设置为 true 时，节点会自动强制集合中定义的成员组织内的客户端对私有数据仅拥有只读权限  
+* **memberOnlyWrite** : 值 true 表示节点自动强制只有属于集合成员组织之一的客户允许对私有数据进行写访问  
+* **endorsementPolicy** : 定义了需要满足的背书政策命令写入私有数据集合  
+收藏级背书政策覆盖链码级别策略  
+有关制定政策的更多信息定义请参阅背书策略主题  
+
+资产转移私有数据示例包含文件 collections_config.json ，文件中定义了三个私有数据集合定义： *assetCollection 、 Org1MSPPrivateCollection、和 Org2MSPPrivateCollection*  
+```TypeScript  
+// collections_config.json
+
+[
+   {
+   "name": "assetCollection",
+   "policy": "OR('Org1MSP.member', 'Org2MSP.member')",
+   "requiredPeerCount": 1,
+   "maxPeerCount": 1,
+   "blockToLive":1000000,
+   "memberOnlyRead": true,
+   "memberOnlyWrite": true
+   },
+   {
+   "name": "Org1MSPPrivateCollection",
+   "policy": "OR('Org1MSP.member')",
+   "requiredPeerCount": 0,
+   "maxPeerCount": 1,
+   "blockToLive":3,
+   "memberOnlyRead": true,
+   "memberOnlyWrite": false,
+   "endorsementPolicy": {
+       "signaturePolicy": "OR('Org1MSP.member')"
+   }
+   },
+   {
+   "name": "Org2MSPPrivateCollection",
+   "policy": "OR('Org2MSP.member')",
+   "requiredPeerCount": 0,
+   "maxPeerCount": 1,
+   "blockToLive":3,
+   "memberOnlyRead": true,
+   "memberOnlyWrite": false,
+   "endorsementPolicy": {
+       "signaturePolicy": "OR('Org2MSP.member')"
+   }
+   }
+]
+```  
+### 4.3 使用链码 API 读写私有数据  
+  资产转移私有数据示例根据数据的访问方式将私有数据分为三个单独的数据定义  
+```TypeScript  
+// Peers in Org1 and Org2 will have this private data in a side database
+type Asset struct {
+       Type  string `json:"objectType"` //Type is used to distinguish the various types of objects in state database
+       ID    string `json:"assetID"`
+       Color string `json:"color"`
+       Size  int    `json:"size"`
+       Owner string `json:"owner"`
+}
+
+// AssetPrivateDetails describes details that are private to owners
+
+// Only peers in Org1 will have this private data in a side database
+type AssetPrivateDetails struct {
+       ID             string `json:"assetID"`
+       AppraisedValue int    `json:"appraisedValue"`
+}
+
+// Only peers in Org2 will have this private data in a side database
+type AssetPrivateDetails struct {
+       ID             string `json:"assetID"`
+       AppraisedValue int    `json:"appraisedValue"`
+}
+```  
+* objectType, color, size, and owner 都存储在 AssetCollection 中  
+* AppraisedValue 的资产存储在集合 *Org1MSPPrivateCollection* 或 *Org2MSPPrivateCollection* 中  
+
+资产传输私有数据样本智能创建的所有数据智能合同存储在PDC中  
+智能合约使用链码API中的 *GetPrivateData()* 和 *PutPrivateData()* 函数来读写私有数据和私有数据集合  
+此私有数据存储在对等方的私有状态数据库中（与公共状态数据库分开），并通过 gossip 协议在授权的对等方之间传播  
+
+#### 4.3.1 读取集合数据  
+智能合约使用链码 API *GetPrivateData()* 在数据库中访问私有数据  
+GetPrivateData() 有两个参数, **集合名(collection name)** 和 **数据键（data key）**  
+集合 *assetCollection* 允许 Org1 和 Org2 的成员在侧数据库中保存私有数据，集合 *Org1MSPPrivateCollection* 只允许 Org1 在侧数据库中保存私有数据, 集合 *Org2MSPPrivateCollection* 只允许 Org2 在侧数据库中保存私有数据  
+
+* **ReadAsset** 用来查询 assetID, color, size and owner 属性的值  
+* **ReadAssetPrivateDetails** 用来查询 appraisedValue 属性的值  
+
+#### 4.3.2 写入私有数据  
+智能合约使用链码API接口 PutPrivateData() 将私有数据保存到私有数据库中  
+使用集合 assetCollection 写入私有数据 assetID, color, size and owner  
+使用集合 Org1MSPPrivateCollection 写入私有数据 appraisedValue  
+
+```TypeScript  
+// 创建资产通过将主要资产详细信息放置在资产集合中来创建新资产
+// 两个组织都可以阅读。评估值存储在所有者组织特定的集合中。
+func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface) error {
+
+    // 从瞬态地图获取新资产
+    transientMap, err := ctx.GetStub().GetTransient()
+    if err != nil {
+        return fmt.Errorf("error getting transient: %v", err)
+    }
+
+    // 资产属性是私有的，因此它们在瞬态字段中传递，而不是在函数参数中传递
+    transientAssetJSON, ok := transientMap["asset_properties"]
+    if !ok {
+        //打印错误到 stdout
+        return fmt.Errorf("asset not found in the transient map input")
+    }
+
+    type assetTransientInput struct {
+        Type           string `json:"objectType"` //Type is used to distinguish the various types of objects in state database
+        ID             string `json:"assetID"`
+        Color          string `json:"color"`
+        Size           int    `json:"size"`
+        AppraisedValue int    `json:"appraisedValue"`
+    }
+
+    var assetInput assetTransientInput
+    err = json.Unmarshal(transientAssetJSON, &assetInput)
+    if err != nil {
+        return fmt.Errorf("failed to unmarshal JSON: %v", err)
+    }
+
+    if len(assetInput.Type) == 0 {
+        return fmt.Errorf("objectType field must be a non-empty string")
+    }
+    if len(assetInput.ID) == 0 {
+        return fmt.Errorf("assetID field must be a non-empty string")
+    }
+    if len(assetInput.Color) == 0 {
+        return fmt.Errorf("color field must be a non-empty string")
+    }
+    if assetInput.Size <= 0 {
+        return fmt.Errorf("size field must be a positive integer")
+    }
+    if assetInput.AppraisedValue <= 0 {
+        return fmt.Errorf("appraisedValue field must be a positive integer")
+    }
+
+    // 检查资产是否已存在
+    assetAsBytes, err := ctx.GetStub().GetPrivateData(assetCollection, assetInput.ID)
+    if err != nil {
+        return fmt.Errorf("failed to get asset: %v", err)
+    } else if assetAsBytes != nil {
+        fmt.Println("Asset already exists: " + assetInput.ID)
+        return fmt.Errorf("this asset already exists: " + assetInput.ID)
+    }
+
+    // 获取提交客户端标识的 ID
+    clientID, err := submittingClientIdentity(ctx)
+    if err != nil {
+        return err
+    }
+
+    // 验证客户端是否正在向其组织中的对等方提交请求
+    // 这是为了确保来自另一个组织的客户端不会尝试读取或
+    // 从此对等方写入私有数据。
+    err = verifyClientOrgMatchesPeerOrg(ctx)
+    if err != nil {
+        return fmt.Errorf("CreateAsset cannot be performed: Error %v", err)
+    }
+
+    // 使提交客户端成为所有者
+    asset := Asset{
+        Type:  assetInput.Type,
+        ID:    assetInput.ID,
+        Color: assetInput.Color,
+        Size:  assetInput.Size,
+        Owner: clientID,
+    }
+    assetJSONasBytes, err := json.Marshal(asset)
+    if err != nil {
+        return fmt.Errorf("failed to marshal asset into JSON: %v", err)
+    }
+
+    // 将资产保存到私有数据收集典型的记录器，记录到结构托管 docker 容器中的 stdout/file，
+    // 运行此链码查找容器名称，如 dev-peer0.org1.example.com-{chaincodename_version}-xyz
+    log.Printf("CreateAsset Put: collection %v, ID %v, owner %v", assetCollection, assetInput.ID, clientID)
+
+    err = ctx.GetStub().PutPrivateData(assetCollection, assetInput.ID, assetJSONasBytes)
+    if err != nil {
+        return fmt.Errorf("failed to put asset into private data collection: %v", err)
+    }
+
+    // 将资产详细信息保存到拥有组织可见的集合
+    assetPrivateDetails := AssetPrivateDetails{
+        ID:             assetInput.ID,
+        AppraisedValue: assetInput.AppraisedValue,
+    }
+
+    assetPrivateDetailsAsBytes, err := json.Marshal(assetPrivateDetails) // marshal asset details to JSON
+    if err != nil {
+        return fmt.Errorf("failed to marshal into JSON: %v", err)
+    }
+
+    // 获取此组织的集合名称。
+    orgCollection, err := getCollectionName(ctx)
+    if err != nil {
+        return fmt.Errorf("failed to infer private collection name for the org: %v", err)
+    }
+
+    // 将资产评估价值放入所有者组织特定的私人数据收集中
+    log.Printf("Put: collection %v, ID %v", orgCollection, assetInput.ID)
+    err = ctx.GetStub().PutPrivateData(orgCollection, assetInput.ID, assetPrivateDetailsAsBytes)
+    if err != nil {
+        return fmt.Errorf("failed to put asset private details: %v", err)
+    }
+    return nil
+}
+```  
+### 4.4 启用网络  
+首先清理之前环境  
+```bash  
+cd fabric-samples/test-network
+./network.sh down
+```  
+从测试网络目录中，您可以使用以下命令启动使用证书颁发机构和 CouchDB 建立结构测试网络：  
+***./network.sh up createChannel -ca -s couchdb***  
+### 4.5 将私有数据智能合约部署到通道  
+从测试网络目录运行以下命令 ：  
+```lua  
+./network.sh deployCC -ccn private -ccp ../asset-transfer-private-data/chaincode-go/ -ccl go -ccep "OR('Org1MSP.peer','Org2MSP.peer')" -cccg ../asset-transfer-private-data/chaincode-go/collections_config.json
+```  
+需要传递私有数据收集定义文件的路径到以上命令  
+作为将链码部署到通道的一部分，两个组织在通道上必须传递相同的专用数据收集定义作为一部分的文档 : doc:chaincode_lifecycle  
+
+当两个组织都使用 Peer Lifecycle Chaincode Approveformyorg 命令时，链码定义包括了私有数据收集的路径，该路径使用 --collections-config 标志进行定义  
+```lua  
+peer lifecycle chaincode approveformyorg -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name private --version 1.0 --collections-config ../asset-transfer-private-data/chaincode-go/collections_config.json --signature-policy "OR('Org1MSP.member','Org2MSP.member')" --package-id $CC_PACKAGE_ID --sequence 1 --tls --cafile $ORDERER_CA
+```  
+在通道成员同意将私有数据收集作为链码定义的一部分之后，使用命令 peer lifecycle chaincode commit <commands/peerlifecycle.html#peer-lifecycle-chaincode-commit>进行数据收集并提交到通道 :  
+```lua  
+peer lifecycle chaincode commit -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name private --version 1.0 --sequence 1 --collections-config ../asset-transfer-private-data/chaincode-go/collections_config.json --signature-policy "OR('Org1MSP.member','Org2MSP.member')" --tls --cafile $ORDERER_CA --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_CA --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_CA
+```  
+### 4.6 注册身份标识  
+首先，我们需要设置以下环境变量以使用 Fabric CA 客户端 ：  
+```bash  
+export PATH=${PWD}/../bin:${PWD}:$PATH
+export FABRIC_CFG_PATH=$PWD/../config/
+```  
+将结构 CA 客户端主页设置为 Org1 CA 管理员的 MSP（此标识由测试网络脚本生成）  
+```bash  
+export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org1.example.com/
+```  
+使用工具 fabric-ca-client 注册新的所有者客户端身份 ： 
+```bash  
+fabric-ca-client register --caname ca-org1 --id.name owner --id.secret ownerpw --id.type client --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"
+```  
+可以通过向 enroll 命令提供注册名称和密钥来生成身份证书和 MSP 文件夹 ：  
+```bash  
+fabric-ca-client enroll -u https://owner:ownerpw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/users/owner@org1.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"
+```  
+将节点 OU 配置文件复制到所有者身份 MSP 文件夹中 :  
+```bash  
+cp "${PWD}/organizations/peerOrganizations/org1.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org1.example.com/users/owner@org1.example.com/msp/config.yaml"
+```  
+将结构 CA 客户端主页设置为 Org2 CA 管理员 ：  
+```bash  
+export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org2.example.com/
+```  
+可以使用工具 fabric-ca-client 注册新的所有者客户端身份 ：  
+```bash  
+fabric-ca-client register --caname ca-org2 --id.name buyer --id.secret buyerpw --id.type client --tls.certfiles "${PWD}/organizations/fabric-ca/org2/tls-cert.pem"
+```  
+可以注册以生成标识 MSP 文件夹 ：  
+```bash  
+fabric-ca-client enroll -u https://buyer:buyerpw@localhost:8054 --caname ca-org2 -M "${PWD}/organizations/peerOrganizations/org2.example.com/users/buyer@org2.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org2/tls-cert.pem"
+```  
+将节点 OU 配置文件复制到买家身份 MSP 文件夹中 :  
+```bash  
+cp "${PWD}/organizations/peerOrganizations/org2.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org2.example.com/users/buyer@org2.example.com/msp/config.yaml"
+```  
+### 4.7 在私有数据中创建资产  
+```bash  
+export PATH=${PWD}/../bin:$PATH
+export FABRIC_CFG_PATH=$PWD/../config/
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/owner@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+```  
+使用 CreateAsset 函数创建一个存储在私有数据中的资产，assetID为 asset1 ，颜色为 green，大小为 20，appraisedValue 值为 100  
+私有数据 appraisedValue 将与私有数据 assetID, color, size 是分开存储的  
+运行下列命令来创建资产 ：  
+```bash  
+export ASSET_PROPERTIES=$(echo -n "{\"objectType\":\"asset\",\"assetID\":\"asset1\",\"color\":\"green\",\"size\":20,\"appraisedValue\":100}" | base64 | tr -d \\n)
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"CreateAsset","Args":[]}' --transient "{\"asset_properties\":\"$ASSET_PROPERTIES\"}"
+```  
+### 4.8 已授权等对方身份查询私有数据  
+集合定义允许 Org1 和 Org2 的所有对等方在其侧数据库中拥有私有数据 assetID, color, size, and owner, 但只有 Org1 中的同级才能在其侧数据库中拥有 Org1 对其私有数据 appraisedValue 的看法  
+
+第一个 query 命令调用 ``ReadAsset``函数，该函数传递 ``assetCollection``作为参数  
+```TypeScript  
+// 读取资产从集合中读取信息
+func (s *SmartContract) ReadAsset(ctx contractapi.TransactionContextInterface, assetID string) (*Asset, error) {
+
+     log.Printf("ReadAsset: collection %v, ID %v", assetCollection, assetID)
+     assetJSON, err := ctx.GetStub().GetPrivateData(assetCollection, assetID) //get the asset from chaincode state
+     if err != nil {
+         return nil, fmt.Errorf("failed to read asset: %v", err)
+     }
+
+     //未找到资产，返回空响应
+     if assetJSON == nil {
+         log.Printf("%v does not exist in collection %v", assetID, assetCollection)
+         return nil, nil
+     }
+
+     var asset *Asset
+     err = json.Unmarshal(assetJSON, &asset)
+     if err != nil {
+         return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
+     }
+
+     return asset, nil
+
+ }
+```  
+第二个 query 命令调用 ``ReadAssetPrivateDetails`` 并传递 ``Org1MSPPrivateDetails`` 作为参数的函数  
+```TypeScript  
+// 读取资产私有详细信息读取组织特定集合中的资产私有详细信息
+func (s *SmartContract) ReadAssetPrivateDetails(ctx contractapi.TransactionContextInterface, collection string, assetID string) (*AssetPrivateDetails, error) {
+     log.Printf("ReadAssetPrivateDetails: collection %v, ID %v", collection, assetID)
+     assetDetailsJSON, err := ctx.GetStub().GetPrivateData(collection, assetID) // 从链码状态获取资产
+     if err != nil {
+         return nil, fmt.Errorf("failed to read asset details: %v", err)
+     }
+     if assetDetailsJSON == nil {
+         log.Printf("AssetPrivateDetails for %v does not exist in collection %v", assetID, collection)
+         return nil, nil
+     }
+
+     var assetDetails *AssetPrivateDetails
+     err = json.Unmarshal(assetDetailsJSON, &assetDetails)
+     if err != nil {
+         return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
+     }
+
+     return assetDetails, nil
+ }
+```  
+使用 ReadAsset 函数查询 assetCollection 集合作为 Org1 来读取创建的资产的主要详细信息：  
+```bash  
+peer chaincode query -C mychannel -n private -c '{"function":"ReadAsset","Args":["asset1"]}'
+```  
+查询作为 Org1 成员的 asset1 的 私有数据 appraisedValue :  
+```bash  
+peer chaincode query -C mychannel -n private -c '{"function":"ReadAssetPrivateDetails","Args":["Org1MSPPrivateCollection","asset1"]}'
+```  
+### 4.9 将私有数据作为未经授权的对等方进行查询  
+需要操作 Org2 的用户  
+#### 4.9.1 切换到 Org2 中的对等方  
+```bash  
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/buyer@org2.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+```  
+#### 4.9.2 查询私有数据 Org2 授权情况  
+```bash  
+peer chaincode query -C mychannel -n private -c '{"function":"ReadAsset","Args":["asset1"]}'
+```  
+#### 4.9.3 查询 Org2 无权访问的私有数据  
+运行以下命令来演示资产的 appraisedValue 未存储在 Org2 对等方的 Org2MSPPrivateCollection 中：  
+```bash  
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadAssetPrivateDetails","Args":["Org2MSPPrivateCollection","asset1"]}'
+```  
+空响应表明 asset1 的私有详细信息在买家 (Org2) 的私有集合中不存在  
+Org2 中的用户也无法读取 Org1 私有数据集合  
+通过在集合配置文件中设置 "memberOnlyRead": true ，我们指定只有 Org1 中的客户端才能从集合中读取数据  
+Org2 的用户只能看到私有数据的公共哈希值
