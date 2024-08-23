@@ -1237,4 +1237,556 @@ peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.exam
 空响应表明 asset1 的私有详细信息在买家 (Org2) 的私有集合中不存在  
 Org2 中的用户也无法读取 Org1 私有数据集合  
 通过在集合配置文件中设置 "memberOnlyRead": true ，我们指定只有 Org1 中的客户端才能从集合中读取数据  
-Org2 的用户只能看到私有数据的公共哈希值
+Org2 的用户只能看到私有数据的公共哈希值  
+### 4.10 转移资产  
+要转移资产，买方（接收方）需要通过调用链码函数 *AgreeToTransfer* 来同意与资产所有者相同的 *appraisedValue*  
+约定的值将存储在 Org2 对等方上的 Org2MSPDetailsCollection 集合中  
+
+运行以下命令以同意 Org2 的评估值为100 ：  
+```bash  
+export ASSET_VALUE=$(echo -n "{\"assetID\":\"asset1\",\"appraisedValue\":100}" | base64 | tr -d \\n)
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"AgreeToTransfer","Args":[]}' --transient "{\"asset_value\":\"$ASSET_VALUE\"}"
+```  
+买方现在可以查询他们在 Org2 私有数据收集中同意的值 ：  
+```bash  
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadAssetPrivateDetails","Args":["Org2MSPPrivateCollection","asset1"]}'
+```  
+资产需要由拥有资产的身份转移， 所以让我们充当 Org1 ：  
+```bash  
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/owner@org1.example.com/msp
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_ADDRESS=localhost:7051
+```  
+来自 Org1 的所有者可以读取由 *AgreeToTransfer* 交易添加的数据，以查看买方身份 ：  
+```bash  
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadTransferAgreement","Args":["asset1"]}'
+```  
+智能合约使用 *GetPrivateDataHash（）* 函数来检查 *Org1MSPPrivateCollection* 中资产评估值的哈希值是否与 *Org2MSPPrivateCollection* 中评估值的哈希值匹配  
+
+* 如果哈希相同，则确认所有者和感兴趣的买方已同意相同的资产价值  
+* 如果满足条件，转账函数将获取买家的客户ID从转让协议中，并使买方成为资产的新所有者  
+* 转移功能还将从前所有者的收藏中删除资产评估值，以及从 *assetCollection* 中删除转让协议  
+
+运行以下命令以传输资产  
+(所有者需要提供资产 ID 和买方到转移交易的组织 MSP ID)  
+```bash  
+export ASSET_OWNER=$(echo -n "{\"assetID\":\"asset1\",\"buyerMSP\":\"Org2MSP\"}" | base64 | tr -d \\n)
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"TransferAsset","Args":[]}' --transient "{\"asset_owner\":\"$ASSET_OWNER\"}" --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
+```  
+可以查询 asset1 以查看传输结果：  
+```bash  
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadAsset","Args":["asset1"]}'
+```  
+确认转移从 Org1 集合中删除了私有详细信息：  
+```bash  
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadAssetPrivateDetails","Args":["Org1MSPPrivateCollection","asset1"]}'
+```  
+### 4.11 清除私有数据  
+切换回作为 Org2 成员运行并面向 Org2 对等方 ：  
+```bash  
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/buyer@org2.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+```  
+仍然可以查询 Org2MSPPrivateCollection 中的 appraisedValue ：  
+```bash  
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadAssetPrivateDetails","Args":["Org2MSPPrivateCollection","asset1"]}'
+```  
+需要跟踪在清除私有数据之前添加的块数  
+打开一个新的终端窗口并运行以下命令以查看 Org2 对等方的私有数据日志 :  
+```bash  
+docker logs peer0.org1.example.com 2>&1 | grep -i -a -E 'private|pvt|privdata'
+```  
+作为 Org2 成员的终端并运行以下命令以创建三个新资产 :  
+```bash  
+export ASSET_PROPERTIES=$(echo -n "{\"objectType\":\"asset\",\"assetID\":\"asset2\",\"color\":\"blue\",\"size\":30,\"appraisedValue\":100}" | base64 | tr -d \\n)
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"CreateAsset","Args":[]}' --transient "{\"asset_properties\":\"$ASSET_PROPERTIES\"}"
+```  
+```bash  
+export ASSET_PROPERTIES=$(echo -n "{\"objectType\":\"asset\",\"assetID\":\"asset3\",\"color\":\"red\",\"size\":25,\"appraisedValue\":100}" | base64 | tr -d \\n)
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"CreateAsset","Args":[]}' --transient "{\"asset_properties\":\"$ASSET_PROPERTIES\"}"  
+```  
+```bash  
+export ASSET_PROPERTIES=$(echo -n "{\"objectType\":\"asset\",\"assetID\":\"asset4\",\"color\":\"orange\",\"size\":15,\"appraisedValue\":100}" | base64 | tr -d \\n)
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"CreateAsset","Args":[]}' --transient "{\"asset_properties\":\"$ASSET_PROPERTIES\"}"
+```  
+返回到另一个终端并运行以下命令以确认新资产导致创建了三个新块 ：  
+```bash  
+docker logs peer0.org1.example.com 2>&1 | grep -i -a -E 'private|pvt|privdata'
+```  
+appraisedValue 现已从 Org2MSPDetailsCollection 私有数据收集中清除  
+可以从 Org2 终端再次发出查询以查看响应是否为空 ：  
+```bash  
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadAssetPrivateDetails","Args":["Org2MSPPrivateCollection","asset1"]}'
+```  
+### 4.12 使用带有私有数据的索引  
+通过将索引与链代码一起打包在 *META-INF/statedb/couchdb/collections/<collection_name>/indexes* 目录中，索引也可以应用于私有数据集合  
+
+要将链代码部署到生产环境，建议与链代码一起定义任何索引  
+以便一旦链代码安装在对等节点上并在通道上实例化，链代码和支持索引就会作为一个单元自动部署  
+当指定 *--collections-config* 标志指向集合 JSON 文件的位置时，关联的索引会在通道上的链代码实例化时自动部署  
+### 4.13 清理  
+***./network.sh down***  
+
+---  
+---  
+
+## 5. 使用 CouchDB  
+### 简介  
+*Fabric* 支持两种类型的节点状态数据库  
+
+* **LevelDB** ： 是默认嵌入在 *peer* 节点的状态数据库  
+将链码数据存为简单的键值对，仅支持键、键范围和复合键查询  
+* **CouchDB** ： 是一个可选的、可替换的状态数据库  
+支持将账本的数据转为 JSON 格式，并支持数据内容的富查询，而不仅仅是基于 *key* 的查询  
+同样支持在链码中部署索引，以实现高效查询和对大数据集的查询  
+
+**注意** ：为了发挥 ``CouchDB`` 的优势，即基于内容的 JSON 查询，您的数据必须以 JSON 格式存储  
+在设置网络之前，必须确定使用 ``LevelDB`` 还是 ``CouchDB``   
+暂不支持节点从 ``LevelDB`` 切换为 ``CouchDB``  
+网络中的所有节点必须使用相同的数据库类型  
+想将 JSON 和二进制数据混合使用，同样可以使用 ``CouchDB`` ，但只能基于键、键范围和复合键来查询二进制数据  
+### 5.1 在 Hyperledger Fabric 中启用 CouchDB  
+可以用 ``CouchDB`` 的 Docker 镜像 ``CouchDB`` ，并且建议将它和节点运行在同一服务器上  
+需要为每个节点设置一个 ``CouchDB`` 容器，并且更新每个节点上的配置文件 core.yaml ，将节点指向 ```CouchDB``` 容器  
+core.yaml 文件的路径必须位于环境变量 *FABRIC_CFG_PATH* 指定的目录中  
+
+* 对于 Docker 的部署，core.yaml 已经预先配置好，位于节点容器的 FABRIC_CFG_PATH 指定的文件夹中   
+当使用Docker环境时，您也可以通过传递环境变量来覆盖 core.yaml 的属性，例如通过 CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS 来设置 ``CouchDB`` 地址  
+* 对于原生的二进制部署， core.yaml 包含在发布的构件中  
+### 5.2 创建索引  
+在这个例子中， Asset 的数据结构定义如下 ：  
+```TypeScript  
+type Asset struct {
+        DocType        string `json:"docType"` //docType is used to distinguish the various types of objects in state database
+        ID             string `json:"ID"`      //the field tags are needed to keep case from bouncing around
+        Color          string `json:"color"`
+        Size           int    `json:"size"`
+        Owner          string `json:"owner"`
+        AppraisedValue int    `json:"appraisedValue"`
+}
+```  
+在此结构中，属性（ docType, ID, color, size, owner, appraisedValue ）定义了和资产相关的账本数据  
+属性 docType 可以在链码中使用，以区分链码命名空间中需要单独查询的不同数据类型  
+使用 ``CouchDB`` 时，每个链码都有自己的 ``CouchDB`` 数据库，也就是说，每个链码都有自己的键的命名空间  
+
+在 Asset 数据结构中， docType 用来标识该 JSON 文档代表资产  
+在链码命名空间中可能存在其他 JSON 文档  
+``CouchDB`` JSON 查询可以检索任意 JSON 字段  
+
+在定义用于链码查询的索引时，每个索引都必须在文本文件中定义，按照 ``CouchDB`` 索引的 JSON 格式，文件扩展名为 *.json 格式  
+
+定义一个索引 ：  
+
+* *fields* : 查询的字段  
+* *name* : 索引名  
+* *type* : 格式是 json  
+
+以下是对字段 foo 构建的名为 foo-index 索引  
+```TypeScript  
+{
+    "index": {
+        "fields": ["foo"]
+    },
+    "name" : "foo-index",
+    "type" : "json"
+}
+```  
+可以把设计文档（ design document ）属性 ddoc 写在索引的定义中  
+为了提高效率，索引可分组写到设计文档中，但 ``CouchDB`` 建议每个设计文档只包含一个索引  
+以下是以“资产转移账本查询”为例，定义的另一种索引方式，索引名称为 indexOwner，使用多个字段 docType 和 owner ，并且包括 ddoc 属性 ：  
+```TypeScript  
+{
+  "index":{
+      "fields":["docType","owner"] // Names of the fields to be queried
+  },
+  "ddoc":"indexOwnerDoc", // (optional) Name of the design document in which the index will be created.
+  "name":"indexOwner",
+  "type":"json"
+}
+```  
+在上边的例子中，如果未指定设计文档 indexOwnerDoc ，则在部署索引时会自动创建  
+可以根据字段列表中指定的一个或多个属性，或指定属性的任意组合，来构建索引  
+一个属性可以存在于同一个 docType 的多个索引中  
+
+在下边的例子中， index1 只包含 owner 属性， index2 包含 owner 和 color 属性， index3 包含 owner 、 color 和 size 属性  
+```TypeScript  
+{
+  "index":{
+      "fields":["owner"] // Names of the fields to be queried
+  },
+  "ddoc":"index1Doc", // (optional) Name of the design document in which the index will be created.
+  "name":"index1",
+  "type":"json"
+}
+
+{
+  "index":{
+      "fields":["owner", "color"] // Names of the fields to be queried
+  },
+  "ddoc":"index2Doc", // (optional) Name of the design document in which the index will be created.
+  "name":"index2",
+  "type":"json"
+}
+
+{
+  "index":{
+      "fields":["owner", "color", "size"] // Names of the fields to be queried
+  },
+  "ddoc":"index3Doc", // (optional) Name of the design document in which the index will be created.
+  "name":"index3",
+  "type":"json"
+}
+```  
+### 5.3 将索引添加到链码文件夹  
+构建索引之后，把它放到到适当的元数据文件夹下，将其与链码一起打包部署  
+可以使用 peer lifecycle chaincode 命令打包并安装链码  
+JSON 索引文件必须放在链码目录的 META-INF/statedb/couchdb/indexes 路径下  
+
+![图片](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/_images/couchdb_tutorial_pkg_example.png)  
+
+#### 5.3.1 启动网络  
+启动 Fabric 测试网络，并使用它来部署资产转移账本查询的链码  
+下面的命令定位到 Fabric samples 中的目录 test-network ：  
+***cd fabric-samples/test-network***  
+希望从一个已知的初始状态开始操作 ：  
+***./network.sh down***  
+如果之前从没运行过这个教程，则需要先安装链码的依赖项，才能将其部署到网络 ：  
+```bash  
+cd ../asset-transfer-ledger-queries/chaincode-go
+GO111MODULE=on go mod vendor
+cd ../../test-network
+```  
+在 test-network 目录中，使用以下命令部署带有 ``CouchDB`` 的测试网络 ：  
+***./network.sh up createChannel -s couchdb***  
+运行这个命令会创建两个 fabric peer 节点，都使用 ``CouchDB`` 作为状态数据库, 同时也会创建一个排序节点和一个名为 mychannel 的通道  
+### 5.4 部署智能合约  
+运行以下命令将智能合约部署到 mychannel ：  
+```bash  
+./network.sh deployCC -ccn ledger -ccp ../asset-transfer-ledger-queries/chaincode-go/ -ccl go -ccep "OR('Org1MSP.peer','Org2MSP.peer')"
+```  
+#### 5.4.1 验证部署的索引  
+为了查看节点上 Docker 容器的日志，请打开一个新的终端窗口，然后运行下边的命令，并过滤日志，用于确认索引已被创建 ：  
+```bash  
+docker logs peer0.org1.example.com  2>&1 | grep "CouchDB index"
+```  
+### 5.5 查询 CouchDB 状态数据库  
+#### 5.5.1 在链码中查询  
+* **QueryAssets –**  
+这种查询方式，可以将一个选择器 JSON 查询字符串传递到函数中  
+ 这类查询方式，对于需要在运行时动态创建自己的查询的客户端应用程序非常有用  
+* **QueryAssetsByOwner –**  
+查询逻辑已在链码中定义，但允许传入查询参数  
+这类查询方式，函数接受单个查询参数，即资产所有者  
+然后使用 JSON 查询语法，查询状态数据库中与 asset 的 docType 和拥有者 id 相匹配的 JSON 文档  
+#### 5.5.2 使用 peer 命令运行查询  
+以 Org1 的身份运行下面的命令，创建一个拥有者是 “tom” 的资产 ：  
+```bash  
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n ledger -c '{"Args":["CreateAsset","asset1","blue","5","tom","35"]}'
+```  
+之后，查询所有属于 tom 的资产  
+```bash  
+// Rich Query with index name explicitly specified:
+peer chaincode query -C mychannel -n ledger -c '{"Args":["QueryAssets", "{\"selector\":{\"docType\":\"asset\",\"owner\":\"tom\"}, \"use_index\":[\"_design/indexOwnerDoc\", \"indexOwner\"]}"]}'
+```  
+有3个参数值得注意：  
+
+* **QueryAssets**  
+Assets 链码中的函数名称  
+QueryAssets() 调用``getQueryResultForQueryString()``，然后将 queryString 传递给 getQueryResult() shim API, 该 API 对状态数据库执行 JSON 查询  
+```TypeScript  
+func (t *SimpleChaincode) QueryAssets(ctx contractapi.TransactionContextInterface, queryString string) ([]*Asset, error) {
+        return getQueryResultForQueryString(ctx, queryString)
+}
+```  
+* **{"selector":{"docType":"asset","owner":"tom"}**  
+这是一个 ad hoc 选择器 字符串的示例，用来查找所有 owner 属性值为 tom 的 asset 的文档  
+* **"use_index":["_design/indexOwnerDoc", "indexOwner"]**  
+指定设计文档名 indexOwnerDoc 和索引名 indexOwner  
+在这个示例中，查询选择器通过指定 use_index 关键字显式包含了索引名  
+在 ``CouchDB`` 中，如果您想在查询中显式包含索引名，则在索引定义中必须包含 ddoc 值，然后它才可以被 use_index 关键字引用  
+### 5.6 使用查询和索引的最好实践  
+本章节的案例有助于演示查询该如何使用索引、什么类型的查询拥有最好的性能  
+**注意点** ：  
+
+* 要查询的索引字段，必须包含在查询的选择器中或排序部分  
+* 越复杂的查询性能越低，并且使用索引的几率也越低  
+* 应该尽量避免会引起全表查询或全索引查询的操作符，比如： $or, $in and $regex  
+
+在教程的前面章节，您已经对 assets 链码执行了下面的查询：  
+```bash  
+// Example one: query fully supported by the index
+export CHANNEL_NAME=mychannel
+peer chaincode query -C $CHANNEL_NAME -n ledger -c '{"Args":["QueryAssets", "{\"selector\":{\"docType\":\"asset\",\"owner\":\"tom\"}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+```  
+已经为 asset 转移查询链码创建了 indexOwnerDoc 索引 ：  
+```bash  
+{"index":{"fields":["docType","owner"]},"ddoc":"indexOwnerDoc", "name":"indexOwner","type":"json"}
+```  
+查询中的字段 docType 和 owner 都已包含在索引中，这使得该查询成为一个完全受支持的查询  
+因此这个查询能使用索引中的数据，不需要搜索整个数据库  
+
+如果在上述查询中添加了额外的字段，它仍会使用索引  
+但是，该查询必须扫描数据库以查找额外字段，从而导致响应时间更长  
+```bash  
+// Example two: query fully supported by the index with additional data
+peer chaincode query -C $CHANNEL_NAME -n ledger -c '{"Args":["QueryAssets", "{\"selector\":{\"docType\":\"asset\",\"owner\":\"tom\",\"color\":\"blue\"}, \"use_index\":[\"/indexOwnerDoc\", \"indexOwner\"]}"]}'
+```  
+如果查询不包含索引中的所有字段，则查询会扫描整个数据库  
+例如，下面的查询搜索所有者 owner，但没有指定该项拥有的类型  
+```bash  
+// Example three: query not supported by the index
+peer chaincode query -C $CHANNEL_NAME -n ledger -c '{"Args":["QueryAssets", "{\"selector\":{\"owner\":\"tom\"}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+```  
+由于索引 ownerIndexDoc 包含两个字段 owner 和 docType ，所以该查询不会使用索引  
+
+$or, $in 和 $regex 等运算符通常会使得查询搜索整个索引，或者根本不使用索引  
+下面的查询包含了 $or 运算符，使得查询会搜索 tom 拥有的每个资产及每个项目 :  
+```bash  
+// Example four: query with $or supported by the index
+peer chaincode query -C $CHANNEL_NAME -n ledger -c '{"Args":["QueryAssets", "{\"selector\":{\"$or\":[{\"docType\":\"asset\"},{\"owner\":\"tom\"}]}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+```  
+这个查询仍然会使用索引，因为它查找的字段都包含在索引 indexOwnerDoc 中  
+
+下面是索引不支持的复杂查询的一个例子  
+```bash  
+// Example five: Query with $or not supported by the index
+peer chaincode query -C $CHANNEL_NAME -n ledger -c '{"Args":["QueryAssets", "{\"selector\":{\"$or\":[{\"docType\":\"asset\",\"owner\":\"tom\"},{\"color\":\"yellow\"}]}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+```  
+这个查询搜索 tom 拥有的所有资产，或颜色是黄色的其他项目  
+这个查询不会使用索引，因为它需要查找整个表来匹配条件 $or  
+### 5.7 在 CouchDB 状态数据库查询中使用分页  
+使用 **Asset transfer ledger queries sample** 中的函数 *QueryAssetsWithPagination* 来演示在链码和客户端应用程序中如何使用分页  
+
+本例假设已经按照上面的样例添加了 asset1
+在节点的容器中，运行以下命令创建另外四个 “tom” 拥有的资产，这样 “tom” 共拥有五项资产 ：  
+```bash  
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile  "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n ledger -c '{"Args":["CreateAsset","asset2","yellow","5","tom","35"]}'
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile  "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n ledger -c '{"Args":["CreateAsset","asset3","green","6","tom","20"]}'
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile  "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n ledger -c '{"Args":["CreateAsset","asset4","purple","7","tom","20"]}'
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile  "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n ledger -c '{"Args":["CreateAsset","asset5","blue","8","tom","40"]}'
+```  
+QueryAssetsWithPagination 增加了 pagesize 和 bookmark  
+* **PageSize** 指定了每次查询返回结果的数量  
+* **bookmark** 是一个 “锚（anchor）”，用来告诉 ``CouchDB`` 当前页从哪开始  
+
+正如下面的链码函数中所示，QueryAssetsWithPagination() 调用 getQueryResultForQueryStringWithPagination() 函数，将 queryString 、bookmark 和 pagesize 传递给 GetQueryResultWithPagination()  
+```TypeScript  
+func (t *SimpleChaincode) QueryAssetsWithPagination(
+        ctx contractapi.TransactionContextInterface,
+        queryString,
+        pageSize int,
+        bookmark string) (*PaginatedQueryResult, error) {
+
+        return getQueryResultForQueryStringWithPagination(ctx, queryString, int32(pageSize), bookmark)
+}
+```  
+  
+```bash  
+// Rich Query with index name explicitly specified and a page size of 3:
+peer chaincode query -C mychannel -n ledger -c '{"Args":["QueryAssetsWithPagination", "{\"selector\":{\"docType\":\"asset\",\"owner\":\"tom\"}, \"use_index\":[\"_design/indexOwnerDoc\", \"indexOwner\"]}","3",""]}'
+```  
+下边是接收到的响应（为清楚起见，增加了换行），返回了5个资产中的3个，因为 pagesize 设置成了 3 :  
+```bash  
+{
+  "records":[
+    {"docType":"asset","ID":"asset1","color":"blue","size":5,"owner":"tom","appraisedValue":35},
+    {"docType":"asset","ID":"asset2","color":"yellow","size":5,"owner":"tom","appraisedValue":35},
+    {"docType":"asset","ID":"asset3","color":"green","size":6,"owner":"tom","appraisedValue":20}],
+  "fetchedRecordsCount":3,
+  "bookmark":"g1AAAABJeJzLYWBgYMpgSmHgKy5JLCrJTq2MT8lPzkzJBYqzJRYXp5YYg2Q5YLI5IPUgSVawJIjFXJKfm5UFANozE8s"
+}
+```  
+
+```bash  
+peer chaincode query -C $CHANNEL_NAME -n ledger -c '{"Args":["QueryAssetsWithPagination", "{\"selector\":{\"docType\":\"asset\",\"owner\":\"tom\"}, \"use_index\":[\"_design/indexOwnerDoc\", \"indexOwner\"]}","3","g1AAAABJeJzLYWBgYMpgSmHgKy5JLCrJTq2MT8lPzkzJBYqzJRYXp5YYg2Q5YLI5IPUgSVawJIjFXJKfm5UFANozE8s"]}'
+```  
+下边是接收到的响应（为清楚起见，增加了换行），返回了5个资产中的3个，返回了剩下的2个记录：  
+```bash  
+{
+  "records":[
+    {"docType":"asset","ID":"asset4","color":"purple","size":7,"owner":"tom","appraisedValue":20},
+    {"docType":"asset","ID":"asset5","color":"blue","size":8,"owner":"tom","appraisedValue":40}],
+  "fetchedRecordsCount":2,
+  "bookmark":"g1AAAABJeJzLYWBgYMpgSmHgKy5JLCrJTq2MT8lPzkzJBYqzJRYXp5aYgmQ5YLI5IPUgSVawJIjFXJKfm5UFANqBE80"
+}
+```  
+返回的书签标记结果集的结束  
+如果我们试图用这个书签进行查询，不会返回任何结果  
+#### 5.7.1 范围查询分页  
+**GetStateByRangeWithPagination** shim API 也会返回书签，以便应用程序在使用 LevelDB 或 CouchDB 状态数据库时可以对范围查询结果进行分页  
+返回的书签代表下一个 *startKey* ，可以用于获取下一页范围查询结果  
+如果所有结果都已检索完毕，返回的书签将是一个空字符串  
+如果在范围查询中指定了 *endKey*，并且结果已检索完，如果使用的是 ``CouchDB`` ，返回的书签将是上次传递的 *endKey*，而如果使用的是 ``LevelDB`` ，将返回的书签则是空字符串  
+### 5.8 更新索引  
+为了更新索引，原来的索引定义必须包含设计文档 ddoc 属性和索引名  
+要更行索引定义，请使用相同的索引名，但改变索引定义  
+只需简单编辑索引 JSON 文件，并在索引中增加或者删除字段即可  
+对索引名称或 ddoc 属性的更改，会导致创建新索引，但原始索引在 ``CouchDB`` 中保持不变，直到被删除  
+#### 5.8.1 迭代索引定义  
+在开发环境中访问 peer 节点的 ``CouchDB`` 状态数据库，则可以迭代测试各种索引以支持链码查询  
+但对链码的任何改变，都需要重新部署  
+使用 CouchDB Fauxton interface 或者命令行 curl 工具来创建和更新索引  
+
+如果不想使用 Fauxton UI，下边是通过 curl 命令在 mychannel_ledger 数据库上创建索引的例子 ：   
+```bash  
+// Index for docType, owner.
+// Example curl command line to define index in the CouchDB channel_chaincode database
+ curl -i -X POST -H "Content-Type: application/json" -d
+        "{\"index\":{\"fields\":[\"docType\",\"owner\"]},
+          \"name\":\"indexOwner\",
+          \"ddoc\":\"indexOwnerDoc\",
+          \"type\":\"json\"}" http://hostname:port/mychannel_ledger/_index
+```  
+### 5.9 删除索引  
+如果需要删除索引，就要手动使用 curl 命令或者 Fauxton 接口操作数据库  
+
+删除索引的 curl 命令格式如下 ：   
+```bash   
+curl -X DELETE http://admin:adminpw@localhost:5984/{database_name}/_index/{design_doc}/json/{index_name} -H  "accept: */*" -H  "Host: localhost:5984"
+```  
+要删除本教程中的索引，curl 命令应该是 ：  
+```bash  
+curl -X DELETE http://admin:adminpw@localhost:5984/mychannel_ledger/_index/indexOwnerDoc/json/indexOwner -H  "accept: */*" -H  "Host: localhost:5984"
+```  
+### 5.10 清理  
+***./network.sh down***  
+
+---
+---  
+
+## 6. 创建通道  
+### 6.1 创建新通道  
+#### 6.1.1 配置configtxgen工具  
+我们将要在 fabric-samples 目录下的 test-network 目录中进行操作  
+***cd fabric-samples/test-network***  
+
+使用以下命令将configtxgen工具添加到您的CLI路径 ：  
+***export PATH=${PWD}/../bin:$PATH***  
+
+为了使用configtxgen，您需要将FABRIC_CFG_PATH环境变量设置为本地包含configtx.yaml文件的目录的路径  
+在本教程中，我们将在configtx文件夹中引用用于设置Fabric测试网络的configtx.yaml ：  
+***export FABRIC_CFG_PATH=${PWD}/configtx***  
+
+打印configtxgen帮助文本来检查是否可以使用该工具 ：  
+***configtxgen --help***  
+#### 6.1.2 使用configtx.yaml  
+在test-network目录下的configtx文件夹中找到configtx.yaml文件，该文件用于部署测试网络  
+包含以下信息，我们将使用这些信息来创建新通道 ：  
+
+*  **Organizations** : 可以成为您的通道成员的组织  
+每个组织都有对用于建立通道MSP的密钥信息的引用  
+* **Ordering service** : 哪些排序节点将构成网络的排序服务，以及它们将用于同意一致交易顺序的共识方法  
+该文件还包含将成为排序服务管理员的组织  
+* **Channel policies** : 文件的不同部分共同定义策略，这些策略将控制组织与通道的交互方式以及哪些组织需要批准通道更新  
+* **Channel profiles** : 每个通道配置文件都引用configtx.yaml文件其他部分的信息来构建通道配置  
+使用预设文件来创建 Orderer 系统通道的创世块以及将被 Peer 组织使用的通道  
+为了将它们与系统通道区分开来， Peer 组织使用的通道通常称为应用通道  
+#### 6.1.3 启动网络  
+确保您仍在本地 fabric-sample 的 est-network 目录中进行操作  
+#### 6.1.4 Orderer系统通道  
+执行 ./network.sh up 命令时，测试网络脚本已经创建了系统通道创世块  
+创世块用于部署单个 Orderer 节点，该 Orderer 节点使用该块创建系统通道并形成网络的排序服务    
+如果检查 ./ network.sh 脚本的输出，则可以在日志中找到创建创世块的命令 ：  
+```bash  
+configtxgen -profile TwoOrgsOrdererGenesis -channelID system-channel -outputBlock ./system-genesis-block/genesis.block
+```  
+
+configtxgen 工具使用来自 configtx.yaml 的 TwoOrgsOrdererGenesis 通道配置文件来写入创世块并将其存储在 system-genesis-block 文件夹中  
+
+下面看到TwoOrgsOrdererGenesis配置文件 ：  
+```TypeScript  
+TwoOrgsOrdererGenesis:
+    <<: *ChannelDefaults
+    Orderer:
+        <<: *OrdererDefaults
+        Organizations:
+            - *OrdererOrg
+        Capabilities:
+            <<: *OrdererCapabilities
+    Consortiums:
+        SampleConsortium:
+            Organizations:
+                - *Org1
+                - *Org2
+```  
+配置文件的 Orderer : 部分创建测试网络使用的单节点 Raft 排序服务，并以 OrdererOrg 作为排序服务管理员  
+配置文件的 Consortiums 部分创建了一个名为 SampleConsortium : 的 Peer 组织的联盟  
+这两个Peer组织Org1和Org2都是该联盟的成员  
+因此，可以将两个组织都包含在测试网络创建的新通道中  
+如果想添加另一个组织作为通道成员而又不将该组织添加到联盟中，则首先需要使用 Org1 和Org2 创建通道，然后通过更新通道配置添加该组织  
+#### 6.1.5 创建应用通道  
+运行以下命令为channel1创建一个创建通道的交易 ：  
+```bash
+configtxgen -profile TwoOrgsChannel -outputCreateChannelTx ./channel-artifacts/channel1.tx -channelID channel1
+```  
+*-channelID* 是将要创建的通道的名称  
+通道名称必须全部为小写字母，少于250个字符，并且与正则表达式[a-z][a-z0-9.-]*匹配  
+该命令使用 *-profile* 标志来引用 configtx.yaml 中的 TwoOrgsChannel : 配置文件，测试网络使用它来创建应用通道 ：  
+```TypeScript
+TwoOrgsChannel:
+    Consortium: SampleConsortium
+    <<: *ChannelDefaults
+    Application:
+        <<: *ApplicationDefaults
+        Organizations:
+            - *Org1
+            - *Org2
+        Capabilities:
+            <<: *ApplicationCapabilities
+```  
+该配置文件从系统通道引用 SampleConsortium 的名称，并且包括来自该联盟的两个 Peer 组织作为通道成员  
+因为系统通道用作创建应用通道的模板，所以系统通道中定义的排序节点成为新通道的默认共识者集合  
+排序服务的管理员成为该通道的Orderer管理员  
+可以使用通道更新在共识者者集合中添加或删除Orderer节点和Orderer组织  
+我们可以使用peer CLI将通道创建交易提交给排序服务  
+要使用 peer CLI，我们需要将 FABRIC_CFG_PATH 设置为 fabric-samples/config 目录中的 core.yaml 文件  
+```bash  
+export FABRIC_CFG_PATH=$PWD/../config/
+```  
+默认情况下，只有属于系统通道的联盟组织的管理员身份才能创建新通道  
+发出以下命令，以Org1中的admin用户身份运行 peer CLI ：  
+```bash
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051
+```  
+以下命令创建通道 ：  
+```bash  
+peer channel create -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com -c channel1 -f ./channel-artifacts/channel1.tx --outputBlock ./channel-artifacts/channel1.block --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```  
+上面的命令使用-f标志提供通道创建交易文件的路径，并使用-c标志指定通道名称  
+-o标志用于选择将用于创建通道的排序节点  
+--cafile 是 Orderer 节点的 TLS 证书的路径  
+#### 6.1.6 Peer加入通道  
+属于该通道成员的组织可以使用 peer channel fetch 命令从排序服务中获取通道创世块  
+然后，组织可以使用创世块，通过 peer channel join 命令将 Peer 加入到该通道  
+一旦 Peer 加入通道，Peer 将通过从排序服务中获取通道上的其他区块来构建区块链账本  
+
+使用以下命令将Org1的Peer加入通道 :  
+```bash  
+peer channel join -b ./channel-artifacts/channel1.block
+```  
+使用 peer channel getinfo 命令验证 Peer 是否已加入通道 ：  
+```bash  
+peer channel getinfo -c channel1
+```  
+该命令将列出通道的区块高度和最新区块的哈希  
+由于创世块是通道上的唯一区块，因此通道的高度将为1 ：  
+```bash  
+2020-03-13 10:50:06.978 EDT [channelCmd] InitCmdFactory -> INFO 001 Endorser and orderer connections initialized
+Blockchain info: {"height":1,"currentBlockHash":"kvtQYYEL2tz0kDCNttPFNC4e6HVUFOGMTIDxZ+DeNQM="}
+```  
