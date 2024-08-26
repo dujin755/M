@@ -1785,8 +1785,360 @@ peer channel join -b ./channel-artifacts/channel1.block
 peer channel getinfo -c channel1
 ```  
 该命令将列出通道的区块高度和最新区块的哈希  
-由于创世块是通道上的唯一区块，因此通道的高度将为1 ：  
+由于创世块是通道上的唯一区块，因此通道的高度将为 1 ：  
 ```bash  
 2020-03-13 10:50:06.978 EDT [channelCmd] InitCmdFactory -> INFO 001 Endorser and orderer connections initialized
 Blockchain info: {"height":1,"currentBlockHash":"kvtQYYEL2tz0kDCNttPFNC4e6HVUFOGMTIDxZ+DeNQM="}
 ```  
+以 Org2 管理员的身份运行 peer CLI :  
+```bash  
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+```  
+尽管我们的文件系统上仍然有通道创世块，但在更现实的场景下，Org2 将从排序服务中获取块  
+```bash
+peer channel fetch 0 ./channel-artifacts/channel_org2.block -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```  
+该命令使用 0 来指定它需要获取加入通道所需的创世块  
+该命令返回通道生成块并将其命名为 channel_org2.block  ，以将其与由 Org1 拉取的块区分开
+可以使用该块将 Org2 的 Peer 加入该通道 ：  
+```bash  
+peer channel join -b ./channel-artifacts/channel_org2.block
+```  
+#### 6.1.7 配置锚节点  
+组织的Peer加入通道后，应至少选择一个 Peer 成为锚定节点  
+为了利用诸如私有数据和服务发现之类的功能，需要 Peer 锚节点  
+每个组织都应在一个通道上设置多个锚节点以实现冗余  
+
+第一步是使用 peer channel fetch 命令来获取最新的通道配置块  
+设置以下环境变量，以 Org1 管理员身份运行 peer CLI ：  
+```bash  
+export FABRIC_CFG_PATH=$PWD/../config/
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=localhost:7051 
+```  
+可以使用以下命令来获取通道配置 ：  
+```bash  
+peer channel fetch config channel-artifacts/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```  
+由于最新的通道配置块是通道创世块，因此将看到该通道的命令返回块 0  
+
+通道配置块存储在channel-artifacts文件夹中，以使更新过程与其他工件分开 :  
+```bash  
+cd channel-artifacts
+```  
+使用configtxlator工具开始通道配置相关工作  
+第一步是将来自 protobuf 的块解码为可以读写友好的 JSON 对象  
+还将去除不必要的块数据，仅保留通道配置    
+```bash  
+configtxlator proto_decode --input config_block.pb --type common.Block --output config_block.json
+jq .data.data[0].payload.data.config config_block.json > config.json
+```  
+这些命令将通道配置块转换为简化的JSON config.json，它将作为我们更新的基准  
+因为我们不想直接编辑此文件，所以我们将制作一个可以编辑的副本  
+```bash
+cp config.json config_copy.json
+```  
+
+使用 jq 工具将 Org1 的 Peer 锚节点添加到通道配置中  
+```bash  
+jq '.channel_group.groups.Application.groups.Org1MSP.values += {"AnchorPeers":{"mod_policy": "Admins","value":{"anchor_peers": [{"host": "peer0.org1.example.com","port": 7051}]},"version": "0"}}' config_copy.json > modified_config.json
+```  
+在 modified_config.json 文件中以 JSON 格式获取了通道配置的更新版本  
+可以将原始和修改的通道配置都转换回 protobuf 格式，并计算它们之间的差异  
+```bash  
+configtxlator proto_encode --input config.json --type common.Config --output config.pb
+configtxlator proto_encode --input modified_config.json --type common.Config --output modified_config.pb
+configtxlator compute_update --channel_id channel1 --original config.pb --updated modified_config.pb --output config_update.pb
+```  
+名为 channel_update.pb 的新的 protobuf 包含我们需要应用于通道配置的 Peer 锚节点更新  
+可以将配置更新包装在交易 Envelope 中，以创建通道配置更新交易  
+```bash
+configtxlator proto_decode --input config_update.pb --type common.ConfigUpdate --output config_update.json
+echo '{"payload":{"header":{"channel_header":{"channel_id":"channel1", "type":2}},"data":{"config_update":'$(cat config_update.json)'}}}' | jq . > config_update_in_envelope.json
+configtxlator proto_encode --input config_update_in_envelope.json --type common.Envelope --output config_update_in_envelope.pb
+```  
+然后使用最终的工件 config_update_in_envelope.pb 来更新通道  
+回到test-network目录 ：  
+**cd ..**  
+
+可以通过向 peer channel update 命令提供新的通道配置来添加 Peer 锚节点  
+因为正在更新仅影响 Org1 的部分通道配置，所以其他通道成员不需要批准通道更新  
+```bash  
+peer channel update -f channel-artifacts/config_update_in_envelope.pb -c channel1 -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```  
+为 Org2 设置锚节点  
+以Org2管理员的身份运行 peer CLI ：  
+```bash
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
+export CORE_PEER_ADDRESS=localhost:9051
+```  
+拉取最新的通道配置块，这是该通道上的第二个块 ：  
+```bash
+peer channel fetch config channel-artifacts/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```
+
+回到test-network目录  
+***cd ..***  
+
+通过执行以下命令来更新通道并设置 Org2 的 Peer 锚节点 ：  
+```bash
+peer channel update -f channel-artifacts/config_update_in_envelope.pb -c channel1 -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```  
+
+可以通过运行 peer channel info 命令来确认通道已成功更新 ：  
+```bash
+peer channel getinfo -c channel1
+```  
+
+已经通过在通道创世块中添加两个通道配置块来更新通道，通道的高度将增加到 3 ：  
+```bash
+Blockchain info: {"height":3,"currentBlockHash":"eBpwWKTNUgnXGpaY2ojF4xeP3bWdjlPHuxiPCTIMxTk=","previousBlockHash":"DpJ8Yvkg79XHXNfdgneDb0jjQlXLb/wxuNypbfHMjas="}
+```
+#### 6.1.8 在新通道上部署链码  
+可以使用 network.sh 脚本将 Fabcar 链码部署到任何测试网络通道  
+***./network.sh deployCC -c channel1***  
+
+运行命令后，应该在日志中看到链代码已部署到通道  
+调用链码将数据添加到通道账本中，然后查询  
+
+```bash
+[{"Key":"CAR0","Record":{"make":"Toyota","model":"Prius","colour":"blue","owner":"Tomoko"}},
+{"Key":"CAR1","Record":{"make":"Ford","model":"Mustang","colour":"red","owner":"Brad"}},
+{"Key":"CAR2","Record":{"make":"Hyundai","model":"Tucson","colour":"green","owner":"Jin Soo"}},
+{"Key":"CAR3","Record":{"make":"Volkswagen","model":"Passat","colour":"yellow","owner":"Max"}},
+{"Key":"CAR4","Record":{"make":"Tesla","model":"S","colour":"black","owner":"Adriana"}},
+{"Key":"CAR5","Record":{"make":"Peugeot","model":"205","colour":"purple","owner":"Michel"}},
+{"Key":"CAR6","Record":{"make":"Chery","model":"S22L","colour":"white","owner":"Aarav"}},
+{"Key":"CAR7","Record":{"make":"Fiat","model":"Punto","colour":"violet","owner":"Pari"}},
+{"Key":"CAR8","Record":{"make":"Tata","model":"Nano","colour":"indigo","owner":"Valeria"}},
+{"Key":"CAR9","Record":{"make":"Holden","model":"Barina","colour":"brown","owner":"Shotaro"}}]
+===================== Query successful on peer0.org1 on channel 'channel1' =====================    
+```  
+### 6.2 使用configtx.yaml创建通道配置  
+使用本教程来学习如何使用 *configtx.yaml* 文件来构建存储在创世块中的初始通道配置  
+测试网络使用的 *configtx.yaml* 文件位于 configtx 文件夹中  
+在文本编辑器中打开该文件  
+#### 6.2.1 Organizations  
+通道 MSP 存储在通道配置中，并包含用于标识组织的节点，应用程序和管理员的证书  
+*configtx.yaml* 文件的 *Organizations* 部分用于为通道的每个成员创建通道MSP和随附的MSP ID  
+测试网络使用的 *configtx.yaml* 文件包含三个组织  
+可以添加到应用程序通道的两个组织是 *Peer* 组织 Org1 和 Org2  
+OrdererOrg 是一个 *Orderer* 组织，是排序服务的管理员  
+在下面看到 *configtx.yaml* 的一部分，该部分定义了测试网络的Org1 ：  
+```bash  
+- &Org1
+    # DefaultOrg defines the organization which is used in the sampleconfig
+    # of the fabric.git development environment
+    Name: Org1MSP
+
+    # ID to load the MSP definition as
+    ID: Org1MSP
+
+    MSPDir: ../organizations/peerOrganizations/org1.example.com/msp
+
+    # Policies defines the set of policies at this level of the config tree
+    # For organization policies, their canonical path is usually
+    #   /Channel/<Application|Orderer>/<OrgName>/<PolicyName>
+    Policies:
+        Readers:
+            Type: Signature
+            Rule: "OR('Org1MSP.admin', 'Org1MSP.peer', 'Org1MSP.client')"
+        Writers:
+            Type: Signature
+            Rule: "OR('Org1MSP.admin', 'Org1MSP.client')"
+        Admins:
+            Type: Signature
+            Rule: "OR('Org1MSP.admin')"
+        Endorsement:
+            Type: Signature
+            Rule: "OR('Org1MSP.peer')"
+
+    # leave this flag set to true.
+    AnchorPeers:
+        # AnchorPeers defines the location of peers which can be used
+        # for cross org gossip communication.  Note, this value is only
+        # encoded in the genesis block in the Application section context
+        - Host: peer0.org1.example.com
+          Port: 7051
+```  
+* ``Name`` 字段是用于标识组织的非正式名称  
+* `ID` 字段是组织的 MSP ID  
+MSP ID 充当组织的唯一标识符，并且由通道策略引用，并包含在提交给通道的交易中  
+* `MSPDir` 是组织创建的 MSP 文件夹的路径  
+*configtxgen* 工具将使用此MSP文件夹来创建通道 MSP  
+该 MSP 文件夹需要包含以下信息，这些信息将被传输到通道MSP并存储在通道配置中：  
+1 . 一个CA根证书，为组织建立信任根 , CA根证书用于验证应用程序，节点或管理员是否属于通道成员  
+2 . 来自 TLS CA 的根证书，该证书颁发了 *Peer* 节点或 *Orderer* 节点的 TLS 证书  
+3 . 如果启用了 Node OU，则 MSP 文件夹需要包含一个 *config.yaml* 文件  
+4 . 如果未启用 Node OU，则 MSP 需要包含一个 *admincerts* 文件夹  
+* ``Policies`` 部分用于定义一组引用通道成员的签名策略  
+* ``AnchorPeers`` 字段列出了组织的锚节点  
+为了利用诸如私有数据和服务发现之类的功能，锚节点是必需的  
+建议组织选择至少一个锚节点  
+#### 6.2.2 Capabilities  
+在 *configtx.yaml* 文件中，您将看到三个功能组 ：  
+* ``Application`` 功能可控制 Peer 节点使用的功能，例如 Fabric 链码生命周期，并设置可以由加入通道的 Peer 运行的 Fabric 二进制文件的最低版本  
+* ``Orderer`` 功能可控制 *Orderer* 节点使用的功能，例如 *Raft* 共识，并设置可通过 *Orderer*属于通道共识者集合的节点运行的 *Fabric* 二进制文件的最低版本  
+* ``Channel`` 功能设置可以由 *Peer* 节点和 *Orderer* 节点运行的Fabric的最低版本  
+#### 6.2.3 Application  
+Application 部分定义了控制 *Peer* 组织如何与应用程序通道交互的策略  
+这些策略控制需要批准链码定义或给更新通道配置的请求签名的 *Peer* 组织的数量  
+这些策略还用于限制对通道资源的访问，例如写入通道账本或查询通道事件的能力  
+
+测试网络使用 *Hyperledger Fabric* 提供的默认 *Application* 策略  
+如果您使用默认策略，则所有 *Peer* 组织都将能够读取数据并将数据写入账本  
+默认策略还要求大多数通道成员给通道配置更新签名，并且大多数通道成员需要批准链码定义，然后才能将链码部署到通道  
+#### 6.2.4 Orderer  
+每个通道配置都在通道共识者集合中包括 *Orderer* 节点  
+
+测试网络使用 *configtx.yaml* 文件的 *Orderer* 部分来创建单节点 *Raft* 排序服务  
+*OrdererType* 字段用于选择Raft作为共识类型 ：  
+***OrdererType: etcdraft***  
+*Raft* 排序服务由可以参与共识过程的共识者列表定义  
+因为测试网络仅使用一个 *Orderer* 节点，所以共识者列表仅包含一个端点 ：  
+```TypeScript
+EtcdRaft :
+    Consenters:
+    - Host: orderer.example.com
+      Port: 7050
+      ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt
+      ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt
+    Addresses:
+    - orderer.example.com:7050 
+```  
+共识者列表中的每个 Orderer 节点均由其端点地址以及其客户端和服务器 TLS 证书标识  
+如果要部署多节点排序服务，则需要提供主机名，端口和每个节点使用的 TLS 证书的路径  
+还需要将每个排序节点的端点地址添加到 *Addresses* 列表中  
+
+* 使用 *BatchTimeout* 和 *BatchSize* 字段通过更改每个块的最大大小以及创建新块的频率来调整通道的延迟和吞吐量  
+* *Policies* 部分创建用于管理通道共识者集合的策略  
+该策略要求大多数 *Orderer* 管理员批准添加或删除 *Orderer* 节点，组织或对分块切割参数进行更新  
+#### 6.2.5 Channel  
+通道部分定义了用于管理最高层级通道配置的策略  
+对于应用程序通道，这些策略控制哈希算法，用于创建新块的数据哈希结构以及通道功能级别  
+在系统通道中，这些策略还控制Peer组织的联盟的创建或删除  
+#### 6.2.6 Profiles  
+*configtxgen* 工具读取 *Profiles* 部分中的通道配置文件以构建通道配置  
+每个配置文件都使用 YAML 语法从文件的其他部分收集数据  
+*configtxgen* 工具用此配置为应用程序通道创建通道创建交易，或为系统通道写入通道创世块  
+
+测试网络使用的 *configtx.yaml* 包含两个通道配置文件 ``TwoOrgsOrdererGenesis`` 和``TwoOrgsChannel`` :   
+``TwoOrgsOrdererGenesis`` 配置文件用于创建系统通道创世块 ：  
+```TypeScript  
+TwoOrgsOrdererGenesis:
+    <<: *ChannelDefaults
+    Orderer:
+        <<: *OrdererDefaults
+        Organizations:
+            - *OrdererOrg
+        Capabilities:
+            <<: *OrdererCapabilities
+    Consortiums:
+        SampleConsortium:
+            Organizations:
+                - *Org1
+                - *Org2
+```  
+该配置文件创建一个名为SampleConsortium的联盟，该联盟在 *configtx.yaml* 文件中包含两个 *Peer* 组织 Org1 和 Org2  
+测试网络使用 ``TwoOrgsChannel`` 配置文件创建应用程序通道 ：  
+```TypeScript
+TwoOrgsChannel:
+    Consortium: SampleConsortium
+    <<: *ChannelDefaults
+    Application:
+        <<: *ApplicationDefaults
+        Organizations:
+            - *Org1
+            - *Org2
+        Capabilities:
+            <<: *ApplicationCapabilities
+```  
+*TwoOrgsChannel* 提供了测试网络系统通道托管的联盟名称 *SampleConsortium*  
+在 Application 部分中，来自联盟的两个组织 Org1 和 Org2 均作为通道成员包括在内  
+### 6.3 通道策略  
+与通道配置的其他部分不同，控制通道的策略由 *configtx.yaml* 文件的不同部分组合起来才能确定  
+#### 6.3.1 签名策略  
+默认情况下，每个通道成员都定义了一组引用其组织的签名策略  
+当提案提交给 Peer 或交易提交给 Orderer 节点时，节点将读取附加到交易上的签名，并根据通道配置中定义的签名策略对它们进行评估  
+每个签名策略都有一个规则，该规则指定了一组签名可以满足该策略的组织和身份  
+
+可以在下面 *configtx.yaml* 中的 *Organizations* 部分中看到由 *Org1* 定义的签名策略 ：  
+```TypeScript  
+- &Org1
+
+  ...
+
+  Policies:
+      Readers:
+          Type: Signature
+          Rule: "OR('Org1MSP.admin', 'Org1MSP.peer', 'Org1MSP.client')"
+      Writers:
+          Type: Signature
+          Rule: "OR('Org1MSP.admin', 'Org1MSP.client')"
+      Admins:
+          Type: Signature
+          Rule: "OR('Org1MSP.admin')"
+      Endorsement:
+          Type: Signature
+          Rule: "OR('Org1MSP.peer')"
+```  
+上面的所有策略都可以通过Org1的签名来满足  
+但是，每个策略列出了组织内部能够满足该策略的一组不同的角色  
+**Admins** 策略只能由具有管理员角色的身份提交的交易满足，而只有具有 *peer* 的身份才能满足 Endorsement 策略  
+#### 6.3.2 ImplicitMeta策略  
+如果您的通道使用默认策略，则每个组织的签名策略将由通道配置中更高层级的 ImplicitMeta策略评估  
+ImplicitMeta 策略不是直接评估提交给通道的签名，而是使用规则在通道配置中指定可以满足该策略的一组其他策略  
+
+可以在下面的 *configtx.yaml* 文件的 *Application* 部分中看到定义的 ImplicitMeta 策略 ：  
+```TypeScript  
+Policies:
+    Readers:
+        Type: ImplicitMeta
+        Rule: "ANY Readers"
+    Writers:
+        Type: ImplicitMeta
+        Rule: "ANY Writers"
+    Admins:
+        Type: ImplicitMeta
+        Rule: "MAJORITY Admins"
+    LifecycleEndorsement:
+        Type: ImplicitMeta
+        Rule: "MAJORITY Endorsement"
+    Endorsement:
+        Type: ImplicitMeta
+        Rule: "MAJORITY Endorsement"
+```  
+#### 6.3.3 通道修改策略  
+通道结构由通道配置内的修改策略控制  
+通道配置的每个组件都有一个修改策略，需要满足修改策略才能被通道成员更新  
+每个修改策略都可以引用 ImplicitMeta 策略或签名策略  
+则定义每个组织的值将引用与该组织关联的 Admins 签名策略  
+定义通道成员集合的应用程序组的修改策略是  Channel/Application/Admins ImplicitMeta策略  
+#### 6.3.4 通道策略和访问控制列表  
+通道配置中的策略也由访问控制列表（ACLs）引用，该访问控制列表用于限制对通道使用的*Fabric* 资源的访问  
+ACL 扩展了通道配置内的策略，以管理通道的进程  
+例如，以下 ACL 限制了谁可以基于 /Channel/Application/Writers 策略调用链码 ：  
+```bash  
+# ACL policy for invoking chaincodes on peer
+peer/Propose: /Channel/Application/Writers
+```  
+大多数默认 ACL 指向通道配置的 Application 部分中的 ImplicitMeta 策略  
+为了扩展上面的示例，如果组织可以满足/Channel/Application/Writers策略，则可以调用链码  
+![图片](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/_images/application-writers.png)  
+#### 6.3.5 Orderer策略  
+*configtx.yaml* 的 *Orderer* 部分中的 *ImplicitMeta* 策略以与 *Application* 部分管理 *Peer* 组织类似的方式来管理通道的 *Orderer* 节点   
+*ImplicitMeta* 策略指向与排序服务管理员的组织相关联的签名策略  
+![图片](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/_images/orderer-policies.png)  
+如果使用默认策略，则需要大多数 *Orderer* 组织批准添加或删除 *Orderer* 节点  
+![图片](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/_images/orderer-admins.png)  
+*Peer* 使用 Channel/Orderer/BlockValidation 策略来确认添加到通道的新块是由作为通道共识者集合一部分的 *Orderer* 节点生成的，并且该块未被篡改或被另一个 *Peer* 组织创建  
