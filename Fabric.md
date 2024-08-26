@@ -2142,3 +2142,354 @@ peer/Propose: /Channel/Application/Writers
 如果使用默认策略，则需要大多数 *Orderer* 组织批准添加或删除 *Orderer* 节点  
 ![图片](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/_images/orderer-admins.png)  
 *Peer* 使用 Channel/Orderer/BlockValidation 策略来确认添加到通道的新块是由作为通道共识者集合一部分的 *Orderer* 节点生成的，并且该块未被篡改或被另一个 *Peer* 组织创建  
+
+---
+---  
+
+## 7. 向通道添加组织  
+本教程通过向应用通道中添加一个新的组织 Org3 来扩展 *Fabric* 测试网络  
+### 7.1 环境构建  
+我们将从克隆到本地的 *fabric-samples* 的子目录 *test-network* 进行操作  
+***cd fabric-samples/test-network***  
+
+首先，使用 *network.sh* 脚本清理环境  
+这个命令会清除所有活动状态或终止状态的容器，并且移除之前生成的构件  
+***./network.sh down***  
+
+运行带有一个命名为 mychannel 的通道的测试网络 :  
+***./network.sh up createChannel***  
+### 7.2 使用脚本将Org3加入通道  
+在 *test-network* 目录下，简单地执行以下命令来使用脚本 ：  
+***./eyfn.sh up***  
+### 7.3 手动将Org3加入通道  
+如果你刚执行了 addOrg3.sh 脚本，你需要先将网络关掉  
+下面的命令将关掉所有的组件，并移出所有组织的加密材料 ：  
+***./addOrg3.sh down***  
+
+网络关闭后，将其再次启动 ：  
+```bash  
+cd ..
+./network.sh up createChannel
+```  
+这会使网络恢复到执行 addOrg3.sh 脚本前的状态  
+### 7.4 生成 Org3 加密材料  
+在另一个终端，切换到 *test-network* 的子目录 addOrg3 中  
+***cd addOrg3***  
+首先，我们将为 Org3 的 peer 节点以及一个应用程序和管理员用户创建证书和密钥  
+因为我们在更新一个示例通道，所以我们将使用 cryptogen 工具代替 CA  
+下面的命令使用 *cryptogen* 读取 *org3-crypto.yaml* 文件并在 org3.example.com 文件夹中生成 Org3 的加密材料  
+```bash
+../../bin/cryptogen generate --config=org3-crypto.yaml --output="../organizations"
+```  
+在 *test-network/organizations/peerOrganizations* 目录中，你能在 Org1 和 Org2 证书和秘钥旁边找到已生成的 Org3 加密材料  
+
+一旦生成了 Org3 的加密材料，就能使用 *configtxgen* 工具打印出 Org3 的组织定义  
+```bash
+export FABRIC_CFG_PATH=$PWD
+../../bin/configtxgen -printOrg Org3MSP > ../organizations/peerOrganizations/org3.example.com/org3.json
+```  
+上面的命令会创建一个 JSON 文件 – org3.json – 并将其写入到 ``test-network/organizations/peerOrganizations/org3.example.com`` 文件夹  
+
+这个组织定义文件包含了 Org3 的策略定义，还有三个 base 64 格式的重要的证书 ：  
+
+* 一个 CA 根证书, 用于建立组织的根信任  
+* 一个 TLS 根证书, 用于在 gossip 协议中识别 Org3 的块传播和服务发现  
+* 管理员用户证书 (以后作为Org3的管理员会用到它)  
+### 7.5 启动Org3组件  
+在addOrg3目录中执行以下命令 :  
+```bash  
+docker-compose -f docker/docker-compose-org3.yaml up -d
+```  
+将看到 Org3 peer 节点的创建和一个命名为 Org3CLI 的 Fabric tools 容器  
+### 7.6 准备CLI环境  
+使用以下命令进入 Org3CLI 容器 :  
+***docker exec -it Org3cli bash***  
+
+这个容器已经被挂载在 *organizations* 文件夹中，让我们能够访问所有组织和 Orderer Org的加密材料和  TLS 证书  
+可以使用环境变量来操作 Org3CLI 容器，以切换 Org1、Org2 或 Org3 的管理员角色  
+需要为 orderer TLS 证书和通道名称设置环境变量 :  
+```bash
+export ORDERER_CA=/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+export CHANNEL_NAME=mychannel
+```  
+检查下以确保变量已经被正确设置 ：  
+```bash
+echo $ORDERER_CA && echo $CHANNEL_NAME
+```  
+### 7.7 获取配置  
+现在我们有了一个设置了 ORDERER_CA 和 CHANNEL_NAME 环境变量的 CLI 容器  
+获取通道 – mychannel 的最新的配置区块  
+
+因为 Org3 还不是通道的成员，所以我们需要作为另一个组织的管理员来操作以获取通道配置  
+因为 Org1 是通道的成员，所以 Org1 管理员有权从 ordering 服务中获取通道配置  
+作为Org1管理员进行操作，执行以下命令 ：  
+```bash
+# you can issue all of these commands at once
+
+export CORE_PEER_LOCALMSPID="Org1MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+export CORE_PEER_ADDRESS=peer0.org1.example.com:7051
+```  
+现在执行命令获取最新的配置块 ：  
+```bash
+peer channel fetch config config_block.pb -o orderer.example.com:7050 -c $CHANNEL_NAME --tls --cafile $ORDERER_CA
+```  
+这个命令将通道配置区块以二进制 *protobuf* 形式保存在 config_block.pb  
+### 7.8 将配置转化为JSON格式并裁剪  
+现在用 *configtxlator* 工具将这个通道配置解码为 JSON 格式（以便被友好地阅读和修改）  
+也必须裁剪所有的头部、元数据、创建者签名等以及其他和我们将要做的修改无关的内容  
+通过 jq 这个工具来完成裁剪 ：  
+```bash
+configtxlator proto_decode --input config_block.pb --type common.Block | jq .data.data[0].payload.data.config > config.json
+```  
+这个命令使我们得到一个裁剪后的 JSON 对象 *– config.json* ，这个文件将作为我们配置更新的基准  
+### 7.9 添加Org3加密材料  
+将再次使用 jq 工具去追加 Org3 的配置定义 – org3.json – 到通道的应用组字段，同时定义输出文件是 – modified_config.json  
+```bash
+jq -s '.[0] * {"channel_group":{"groups":{"Application":{"groups": {"Org3MSP":.[1]}}}}}' config.json ./organizations/peerOrganizations/org3.example.com/org3.json > modified_config.json
+```  
+在 Org3CLI 容器有两个重要的 JSON 文件 – config.json 和 modified_config.json  
+初始的文件包含 Org1 和 Org2 的材料，而 modified 文件包含了总共3个组织  
+现在只需要将这 2 个 JSON 文件重新编码并计算出差异部分  
+
+首先，将 *config.json* 文件倒回到 *protobuf* 格式，命名为 config.pb ：  
+```bash
+configtxlator proto_encode --input config.json --type common.Config --output config.pb
+```  
+下一步，将 *modified_config.json* 编码成 *modified_config.pb* :  
+```bash
+configtxlator proto_encode --input modified_config.json --type common.Config --output modified_config.pb
+```  
+现在使用 configtxlator 去计算两个protobuf配置的差异  
+这条命令会输出一个新的 protobuf 二进制文件，命名为 org3_update.pb :  
+```bash
+configtxlator compute_update --channel_id $CHANNEL_NAME --original config.pb --updated modified_config.pb --output org3_update.pb
+```  
+这个新的 proto 文件 – org3_update.pb – 包含了 Org3 的定义和指向 Org1 和 Org2 材料的更高级别的指针  
+
+在提交通道更新前，执行最后做几个步骤  
+首先，将这个对象解码成可编辑的 JSON 格式，并命名为 org3_update.json :  
+```bash
+configtxlator proto_decode --input org3_update.pb --type common.ConfigUpdate | jq . > org3_update.json
+```  
+接下来的步骤要把之前裁剪掉的头部信息还原回来, 将这个文件命名为 *org3_update_in_envelope.json*  
+```bash
+echo '{"payload":{"header":{"channel_header":{"channel_id":"'$CHANNEL_NAME'", "type":2}},"data":{"config_update":'$(cat org3_update.json)'}}}' | jq . > org3_update_in_envelope.json
+```  
+使用我们格式化好的 JSON – org3_update_in_envelope.json – 我们最后一次使用 *configtxlator* 工具将他转换为 *Fabric* 需要的完全成熟的 *protobuf* 格式  
+将最后的更新对象命名为 *org3_update_in_envelope.pb*  
+```bash
+configtxlator proto_encode --input org3_update_in_envelope.json --type common.Envelope --output org3_update_in_envelope.pb  
+```  
+### 7.10 签名并提交配置更新  
+现在有一个 *protobuf* 二进制文件 – org3_update_in_envelope.pb – 在我们的 Org3CLI 容器内  
+但是，在配置写入到账本前，需要来自必要的 Admin 用户的签名  
+我们通道应用组的修改策略（mod_policy）设置为默认值 MAJORITY ，这意味着我们需要大多数已经存在的组织管理员去签名这个更新  
+因为只有两个组织 – Org1 和 Org2 – 所以两个的大多数也还是两个，需要它们都签名  
+没有这两个签名，排序服务会因为不满足策略而拒绝这个交易  
+
+首先，让我们以 Org1 管理员来签名这个更新 proto  
+记住导出了必要的环境变量，以作为Org1管理员来操作Org3CLI容器  
+下面的 *peer channel signconfigtx* 命令将更新签名为 Org1  
+```bash
+peer channel signconfigtx -f org3_update_in_envelope.pb
+```  
+最后一步，我们将容器的身份切换为 Org2 管理员用户   
+通过导出和 Org2 MSP 相关的4个环境变量实现这步  
+```bash
+# you can issue all of these commands at once
+
+export CORE_PEER_LOCALMSPID="Org2MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
+export CORE_PEER_ADDRESS=peer0.org2.example.com:9051
+```  
+最后，我们执行 peer channel update 命令  
+Org2 管理员在这个命令中会附带签名，因此就没有必要对 *protobuf* 进行两次签名  
+发起更新调用 ：  
+```bash  
+peer channel update -f org3_update_in_envelope.pb -c $CHANNEL_NAME -o orderer.example.com:7050 --tls --cafile $ORDERER_CA
+```  
+可以通过进入到 Org3CLI 容器外的一个终端并用以下命令来检查查看 peer0.org1.example.com 的日志 ：  
+```bash
+docker logs -f peer0.org1.example.com
+```  
+### 7.11 将Org3加入通道  
+此时，通道的配置已经更新并包含了我们新的组织 – Org3 – 意味者这个组织下的节点可以加入到 mychannel  
+在 Org3CLI 容器中，导出一下的环境变量用来以 Org3Admin 的身份来进行操作 ：  
+```bash
+# you can issue all of these commands at once
+
+export CORE_PEER_LOCALMSPID="Org3MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations/peerOrganizations/org3.example.com/users/Admin@org3.example.com/msp
+export CORE_PEER_ADDRESS=peer0.org3.example.com:11051
+```  
+现在，向排序服务发送一个调用，请求 mychannel 的创世块  
+由于成功地更新了通道，排序服务将验证 Org3 可以拉取创世块并加入该通道 
+
+如果没有成功地将 Org3 附加到通道配置中，排序服务将拒绝此请求  
+使用 peer channel fetch 命令来获取这个区块 ：  
+```bash
+peer channel fetch 0 mychannel.block -o orderer.example.com:7050 -c $CHANNEL_NAME --tls --cafile $ORDERER_CA
+```  
+如果成功，该命令将创世块返回到名为 mychannel.block 的文件  
+现在可以使用这个块来连接到通道的 peer 端  
+执行 peer channel join 命令并传入创世块，以将 Org3 的 peer 节点加入到通道中 :  
+***peer channel join -b mychannel.block***  
+### 7.12 配置领导节点选举  
+新加入的节点是根据初始区块启动的，初始区块是不包含通道配置更新中新加入的组织信息的  
+因此新的节点无法利用 gossip 协议，因为它们无法验证从自己组织里其他节点发送过来的区块，除非它们接收到将组织加入到通道的那个配置交易  
+
+新加入的节点必须有以下配置之一才能从排序服务接收区块 ：   
+
+* 采用静态领导者模式，将 peer 节点配置为组织的领导者  
+```bash
+CORE_PEER_GOSSIP_USELEADERELECTION=false
+CORE_PEER_GOSSIP_ORGLEADER=true
+```   
+* 采用动态领导者选举，配置节点采用领导选举的方式 ：  
+```bash
+CORE_PEER_GOSSIP_USELEADERELECTION=true
+CORE_PEER_GOSSIP_ORGLEADER=false
+```  
+### 7.13 安装、定义和调用链码  
+在我们以Org3来安装链码之前，我们可以使用 ./network.sh 脚本在通道上部署 Fabcar 链码   
+在 Org3CLI 容器外打开一个新的终端，并进入 test-network 目录  
+然后你可以使用 test-network 脚本来部署 Fabcar 链码 :  
+```bash
+cd fabric-samples/test-network
+./network.sh deployCC
+```  
+该脚本将在 Org1 和 Org2 的 peer 节点上安装 Fabcar 链码，批准 Org1 和 Org2 的链码定义，然后将链码定义提交给通道  
+一旦将链码定义提交到通道，就会初始化 Fabcar 链码并调用它来将初始数据放到账本上  
+
+在部署了链码之后，我们可以使用以下步骤在 Org3 中调用 Fabcar 链代码  
+这些步骤可以在 test-network 目录中完成，而不必在 Org3CLI 容器中执行  
+在你的终端中复制和粘贴以下环境变量，以便以 Org3 管理员的身份与网络交互 :  
+```bash
+export PATH=${PWD}/../bin:$PATH
+export FABRIC_CFG_PATH=$PWD/../config/
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID="Org3MSP"
+export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org3.example.com/users/Admin@org3.example.com/msp
+export CORE_PEER_ADDRESS=localhost:11051
+```  
+第一步是打包 Fabcar 链码 :  
+```bash
+peer lifecycle chaincode package fabcar.tar.gz --path ../chaincode/fabcar/go/ --lang golang --label fabcar_1
+```  
+这个命令会创建一个链码包，命名为 fabcar.tar.gz，用它来在我们的 Org3 的 peer 节点上安装链码  
+如果通道中运行的是 java 或者 Node.js 语言写的链码，需要根据实际情况修改这个命令  
+输入下面的命令在 peer0.org3.example.com 上安装链码 ：  
+peer lifecycle chaincode install fabcar.tar.gz  
+
+下一步是以 Org3 的身份批准链码 Fabcar 定义  
+Org3 需要批准与 Org1 和 Org2 同样的链码定义，然后提交到通道中  
+为了调用链码，Org3 需要在链码定义中包含包标识符  
+你可以在你的 peer 中查到包标识 ：  
+***peer lifecycle chaincode queryinstalled***  
+
+后面的命令中会需要这个包标识  
+所以继续把它保存到环境变量  
+把 peer lifecycle chaincode queryinstalled 返回的包标识粘贴到下面的命令中  
+这个包标识每个用户可能都不一样，所以需要使用从自己的控制台返回的包标识完成下一步  
+
+使用下面的命令来为 Org3 批准链码 Fabcar 定义 :  
+```bash  
+# use the --package-id flag to provide the package identifier
+# use the --init-required flag to request the ``Init`` function be invoked to initialize the chaincode
+peer lifecycle chaincode approveformyorg -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name fabcar --version 1 --init-required --package-id $CC_PACKAGE_ID --sequence 1 --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```  
+可以使用 peer lifecycle chaincode querycommitted 命令来检查你批准的链码定义是否已经提交到通道中  
+```bash
+# use the --name flag to select the chaincode whose definition you want to query
+peer lifecycle chaincode querycommitted --channelID mychannel --name fabcar --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+```  
+Org3 在批准提交到通道的链码定义后，就可以使用 Fabcar 链码了  
+链码定义使用默认的背书策略，该策略要求通道上的大多数组织背书一个交易  
+这意味着，如果一个组织被添加到通道或从通道中删除，背书策略将自动更新  
+我们之前需要来自 Org1 和 Org2 的背书(2个中的2个)，现在我们需要来自 Org1、Org2 和Org3 中的两个组织的背书(3个中的2个)  
+
+你可以查询链码，以确保它已经在 Org3 的 peer 上启动  
+```bash
+peer chaincode query -C mychannel -n fabcar -c '{"Args":["queryAllCars"]}'
+```  
+应该看到作为响应添加到账本中的汽车的初始列表  
+### 7.14 总结  
+都是为了形成一个用 *protobuf* 二进制表示的差异化的交易对象，然后获取必要数量的管理员签名来使通道配置更新交易满足通道的修改策略  
+
+*configtxlator* 和 *jq* 工具，和不断使用的 *peer channel* 命令，为我们提供了完成这个任务的基本功能  
+
+---
+---  
+
+## 8. 更新通道配置  
+像许多复杂的系统一样，*Hyperledger Fabric* 网络由一些结构及其相关的过程组成  
+**结构** ： 包括用户（如管理员）、组织 、peer 节点 、排序节点、CA、智能合约以及应用程序  
+**过程** ： 结构相互作用的方式。其中最重要的是 策略，这些规则控制着哪些用户可以在什么条件下执行什么操作  
+
+识别区块链网络的结构和管理结构如何相互作用的过程的信息位于通道配置中  
+这些配置由通道成员共同决定，并包含在提交给通道账本的区块中  
+通道配置可以使用 *configtxgen* 工具来构建，该工具使用 *configtx.yaml* 文件作为输入  
+### 8.1 可以更新的通道参数  
+通道是高度可配置的，但也有限制  
+某些与通道相关的内容（例如通道的名称）被确定后就无法再进行修改  
+而且修改在本主题中讨论的某个参数时需要满足通道配置中指定的相关策略  
+#### 8.1.1 通道配置示例  
+为了方便阅读，最好将此配置放入支持 JSON 折叠的查看器中，比如 atom 或 Visual Studio  
+看一下关闭了若干标签后的配置  
+请注意，这是应用程序通道的配置，而不是排序系统通道的配置  
+![图片](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/_images/sample_config.png)  
+
+可以看到这些配置分组：Channel、Application 和 Orderer，以及与这些分组相关的配置参数  
+还可以看到表示组织的 MSP 所在的位置。请注意，Channel 配置分组位于 Orderer 下方  
+#### 8.1.2 关于这些参数的更多信息  
+首先，在配置的多个部分中都有如下配置参数 ：  
+
+* **策略** ： 策略不仅是一个配置值（它可以按照 mod_policy 中的定义进行升级），它们还定义了所有参数在发生变更时所需的环境 更多查看[Policies](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/policies/policies.html)  
+* **功能** ： 确保网络和通道以相同的方式处理事情，为诸如通道配置更新和链码调用之类的事情创建确定性的结果  
+如果没有确定性的结果，当通道上的某个 peer 节点则使交易生效时，通道上的另一个 peer 节点可能会使交易无效  更多查看[Capabilities](https://hyperledger-fabric.readthedocs.io/zh-cn/latest/capabilities_concept.html)  
+
+``Channel/Application``  
+管理应用程序通道特有的配置参数  
+默认情况下，更改这些参数需要大多数应用程序组织管理员的签名  
+
+* **向通道中添加组织** 要想将组织添加到通道，必须生成其 MSP 和其他组织的参数并将它们添加到此处(Channel/Application/groups里)  
+* **与组织相关的参数** 任何特定于组织的参数（例如标识锚节点或组织管理员的证书）都可以修改  
+默认情况下，更改这些值不需要大多数应用程序组织管理员的签名，而只需要该组织本身管理员的签名即可  
+
+``Channel/Orderer``  
+
+* **Batch size** 这些参数决定了一个区块中交易的数量和大小, 没有哪个区块会大于 *absolute_max_bytes*，也没有哪个区块包含的交易数会比 *max_message_count* 多  
+如果可以构造大小不超过 *preferred_max_bytes* 的区块，那么区块将被提早分割，而大于此大小的交易将出现在它们自己的区块中  
+* **Batch timeout** 是指在第一个交易到达后至分割区块前的等待时间, 降低这个值会改善延迟，但降低太多则会由于区块未达到最大容量而降低吞吐量  
+* **Block validation** 该策略指定了一个区块被视为有效区块需要满足什么样的签名要求， 默认情况下，它需要排序组织中某个成员的签名  
+* **Consensus type** 为了能将基于 Kafka 的排序服务切换为基于Raft的排序服务，可以更改通道的共识类型  
+* **Raft 排序服务参数**  
+* **kafka brokers** 当设置 *ConsensusType* 设置为 *kafka* 时，brokers 列表将遍历 *Kafka brokers* 的某些子集（最好是全部），以供排序节点在启动时进行初始连接  
+
+`Channel`  
+* **Orderer addresses** 客户端可以用来调用排序节点的 Broadcast 和 Deliver 功能的地址列表。*peer* 节点会在这些地址中随机选择，并在它们之间进行故障转移来获取区块  
+* **哈希结构** 区块数据的哈希值用 *Merkle Tree* 进行计算。这个值定义了 *Merkle Tree* 的宽度。目前，这个值固定为 4294967295，它是对区块数据串联后进行简单的 *flat hash* 而得到的结果  
+* **哈希算法** 此算法用于计算编码到区块中的 hash 值。这会影响数据哈希和本区块的前一区块的哈希字段。请注意，这个字段当前仅有一个有效的值（SHA256），并且不应该被修改  
+
+### 8.2 编辑配置  
+更新通道配置共有三步操作，从概念上来讲比较简单 ：  
+
+* 获取最新的通道配置  
+* 创建修改后的通道配置  
+* 创建配置更新交易  
+#### 8.2.1 为配置更新设置环境变量  
+在尝试使用示例命令前，请确保设置以下环境变量，这些环境变量取决于你部署的方式  
+请注意，必须为每个要更新的通道设置通道名称 CH_NAME，因为通道配置更新只能应用于要更新的通道的配置  
+
+* CH_NAME：要更新的通道的名称  
+* TLS_ROOT_CA：提出配置更新的组织，其 TLS CA 的 root CA 证书的路径  
+* CORE_PEER_LOCALMSPID：MSP 的名称  
+* CORE_PEER_MSPCONFIGPATH：组织 MSP 的绝对路径  
+* ORDERER_CONTAINER：排序节点容器的名称。请注意，在定位排序服务时，你可以定位排序服务中任意一个活动的节点，你的请求将被自动转发给排序服务的 leader 节点  
+
+**步骤 1：提取并转换配置**  
